@@ -28,6 +28,7 @@ class WatcherServiceStatus:
     running: bool
     path: str | None = None
     detail: str | None = None
+    command: list[str] | None = None
 
 
 def resolve_aimemory_command() -> list[str]:
@@ -97,7 +98,10 @@ def mcp_toml_block(
 
 def install_watcher_service(interval_seconds: float = 10.0) -> InstallResult:
     status = get_watcher_service_status()
-    if status.installed and status.running:
+    expected_command = [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)]
+    if status.installed and status.running and (
+        status.command is None or status.command == expected_command
+    ):
         return InstallResult(False, "Watcher is already installed and running.", status.path)
 
     system = platform.system().lower()
@@ -122,8 +126,7 @@ def get_watcher_service_status() -> WatcherServiceStatus:
 
 
 def _install_launch_agent(interval_seconds: float) -> InstallResult:
-    command = resolve_aimemory_command()
-    args = [*command, "watch", "--interval", str(interval_seconds)]
+    args = [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)]
     home = Path.home()
     plist_path = home / "Library" / "LaunchAgents" / f"{WATCHER_LABEL}.plist"
     logs_dir = home / ".ai-memory" / "logs"
@@ -153,6 +156,15 @@ def _launch_agent_status() -> WatcherServiceStatus:
     installed = plist_path.exists()
     if not installed:
         return WatcherServiceStatus(False, False, str(plist_path))
+    command: list[str] | None = None
+    try:
+        with plist_path.open("rb") as handle:
+            plist = plistlib.load(handle)
+        program_args = plist.get("ProgramArguments")
+        if isinstance(program_args, list) and all(isinstance(arg, str) for arg in program_args):
+            command = program_args
+    except (OSError, plistlib.InvalidFileException):
+        command = None
     uid = os.getuid()
     result = subprocess.run(
         ["launchctl", "print", f"gui/{uid}/{WATCHER_LABEL}"],
@@ -165,6 +177,7 @@ def _launch_agent_status() -> WatcherServiceStatus:
         running=result.returncode == 0,
         path=str(plist_path),
         detail=(result.stderr or result.stdout).strip()[:500] if result.returncode != 0 else None,
+        command=command,
     )
 
 

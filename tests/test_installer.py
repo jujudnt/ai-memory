@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from aimemory.installer import (
+    InstallResult,
     WatcherServiceStatus,
     install_mcp_config,
     install_watcher_service,
@@ -66,13 +67,37 @@ def test_frozen_mcp_command_prefers_bundled_helper(tmp_path: Path):
 def test_install_watcher_short_circuits_when_already_running():
     with patch(
         "aimemory.installer.get_watcher_service_status",
-        return_value=WatcherServiceStatus(True, True, "/tmp/watcher"),
+        return_value=WatcherServiceStatus(True, True, "/tmp/watcher", command=None),
     ):
         result = install_watcher_service()
 
     assert result.changed is False
     assert result.message == "Watcher is already installed and running."
     assert result.path == "/tmp/watcher"
+
+
+def test_install_watcher_reinstalls_when_launch_agent_command_changed():
+    with (
+        patch(
+            "aimemory.installer.get_watcher_service_status",
+            return_value=WatcherServiceStatus(
+                True,
+                True,
+                "/tmp/watcher.plist",
+                command=["/old/AI Memory", "watch", "--interval", "10.0"],
+            ),
+        ),
+        patch("aimemory.installer.resolve_aimemory_command", return_value=["/new/ai-memory-cli"]),
+        patch("platform.system", return_value="Darwin"),
+        patch(
+            "aimemory.installer._install_launch_agent",
+            return_value=InstallResult(True, "Watcher LaunchAgent installed and started.", "/tmp/watcher.plist"),
+        ) as install_launch_agent,
+    ):
+        result = install_watcher_service()
+
+    assert result.changed is True
+    install_launch_agent.assert_called_once_with(10.0)
 
 
 def test_status_exposes_local_storage(tmp_path: Path, monkeypatch):
