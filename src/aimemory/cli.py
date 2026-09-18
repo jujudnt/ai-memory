@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
+from dataclasses import asdict
 from pathlib import Path
 
 from aimemory.cloud import LocalFolderProvider
@@ -17,6 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("doctor", help="Show local AI Memory status.")
+    sub.add_parser("audit", help="Verify raw backups and normalized conversations against Codex.")
+    sub.add_parser("sync", help="Synchronize the configured cloud provider.")
 
     import_parser = sub.add_parser("import-codex", help="Import Codex JSONL sessions.")
     import_parser.add_argument("--codex-home", type=Path, default=None)
@@ -71,13 +74,20 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     service = MemoryService()
 
+    if args.command == "audit":
+        print(json.dumps(service.audit_codex(), indent=2))
+        return 0
+    if args.command == "sync":
+        print(json.dumps(service.sync_now(), indent=2))
+        return 0
+
     if args.command == "doctor":
         print(json.dumps(service.status(), indent=2, sort_keys=True))
         return 0
 
     if args.command == "import-codex":
         result = service.import_codex(codex_home=args.codex_home, force=args.force)
-        print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+        print(json.dumps(asdict(result), indent=2, sort_keys=True))
         return 0
 
     if args.command == "search":
@@ -125,12 +135,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "install-mcp":
         result = install_mcp_config(args.server_name, ai_memory_home=args.ai_memory_home)
-        print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+        print(json.dumps(asdict(result), indent=2, sort_keys=True))
         return 0
 
     if args.command == "install-watcher":
         result = install_watcher_service(interval_seconds=args.interval)
-        print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+        print(json.dumps(asdict(result), indent=2, sort_keys=True))
         return 0
 
     if args.command == "desktop":

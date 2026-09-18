@@ -46,4 +46,4 @@ class MemoryToolHandlers:
         return self.service.status()
 
     def sync_now(self) -> dict:
-        return {"status": "not_configured", "detail": "Cloud sync providers are not configured in this MVP."}
+        return self.service.sync_now()

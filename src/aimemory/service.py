@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import gzip
+import hashlib
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from filelock import FileLock
 
 from aimemory.adapters import CodexAdapter
 from aimemory.archive import JsonArchive
@@ -10,6 +15,7 @@ from aimemory.db import MemoryDatabase
 from aimemory.db.sqlite import file_hash
 from aimemory.models import NormalizedConversation
 from aimemory.search import SearchService
+from aimemory.state import atomic_write, folder_bytes, now, read_json, write_json
 
 
 @dataclass(slots=True)
@@ -17,6 +23,7 @@ class ImportResult:
     scanned: int
     imported: int
     skipped: int
+    errors: list[dict] = field(default_factory=list)
 
 
 class MemoryService:
@@ -26,35 +33,81 @@ class MemoryService:
         self.archive = JsonArchive(self.paths.archive)
         self.db = MemoryDatabase(self.paths.db / "memory.sqlite")
         self.search_service = SearchService(self.db)
+        self.lock = FileLock(str(self.paths.state / "operations.lock"), timeout=1)
 
     def import_codex(self, codex_home: Path | None = None, force: bool = False) -> ImportResult:
+        with self.lock:
+            return self._import_codex(codex_home, force)
+
+    def _import_codex(self, codex_home: Path | None, force: bool) -> ImportResult:
         adapter = CodexAdapter(codex_home=codex_home)
         sessions = adapter.scan_sessions()
+        manifest_path = self.paths.state / "source-manifest.json"
+        manifest = read_json(manifest_path)
         imported = 0
         skipped = 0
+        errors = []
         for session in sessions:
-            stat_hash = file_hash(session.path)
-            state = self.db.import_state(adapter.source, session.path)
+            entry = manifest.get(str(session.path), {})
             if (
                 not force
-                and state
-                and state["file_hash"] == stat_hash
-                and state["size"] == session.size
+                and entry.get("size") == session.size
+                and entry.get("mtime_ns") == session.path.stat().st_mtime_ns
+                and entry.get("parser_version") == 2
+                and (self.paths.archive / entry.get("raw_path", "missing")).is_file()
+                and self.db.get_conversation_row(entry.get("conversation_id", ""))
             ):
                 skipped += 1
                 continue
-            conversation = adapter.parse_session(session.path)
-            archive_path = self.archive.write(conversation)
-            self.db.upsert_conversation(
-                conversation,
-                archive_path=archive_path,
-                source_path=session.path,
-                file_hash=stat_hash,
-                size=session.size,
-                mtime=session.mtime,
-            )
-            imported += 1
-        return ImportResult(scanned=len(sessions), imported=imported, skipped=skipped)
+            try:
+                stat = session.path.stat()
+                raw = session.path.read_bytes()
+                stat_hash = hashlib.sha256(raw).hexdigest()
+                conversation = adapter.parse_session(session.path, raw)
+                raw_path = Path("raw") / conversation.id / f"{stat_hash}.jsonl.gz"
+                if not (self.paths.archive / raw_path).exists():
+                    atomic_write(self.paths.archive / raw_path, gzip.compress(raw, compresslevel=6, mtime=0))
+                conversation.metadata.update(source_sha256=stat_hash, raw_path=raw_path.as_posix())
+                # Preserve every source variant; the active index selects the latest revision.
+                self.accept_conversation(conversation)
+                with self.db.connect() as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO imports(source, source_path, source_session_id, file_hash, size, mtime, last_offset) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (adapter.source, str(session.path), conversation.source_session_id, stat_hash, len(raw), stat.st_mtime, len(raw)),
+                    )
+                manifest[str(session.path)] = {
+                    "conversation_id": conversation.id, "source_session_id": conversation.source_session_id,
+                    "sha256": stat_hash, "raw_path": raw_path.as_posix(), "size": len(raw),
+                    "mtime_ns": stat.st_mtime_ns, "parser_version": 2,
+                    "messages": len(conversation.messages), "tool_calls": len(conversation.tool_calls),
+                }
+                imported += 1
+            except Exception as exc:
+                errors.append({"path": str(session.path), "error": str(exc)})
+            write_json(manifest_path, manifest)
+        return ImportResult(scanned=len(sessions), imported=imported, skipped=skipped, errors=errors)
+
+    def accept_conversation(self, conversation: NormalizedConversation) -> bool:
+        existing = self.get_conversation(conversation.id)
+        def revision_key(value):
+            digest = hashlib.sha256(json.dumps(value.to_dict(), sort_keys=True).encode()).hexdigest()
+            return (value.metadata.get("parser_version", 0), value.updated_at or "",
+                    len(value.messages) + len(value.tool_calls), digest)
+        if existing and revision_key(existing) > revision_key(conversation):
+            # Keep a divergent/older revision without replacing the current index.
+            from tempfile import TemporaryDirectory
+            with TemporaryDirectory(dir=self.paths.cache) as directory:
+                temp_archive = JsonArchive(Path(directory))
+                path = temp_archive.write(conversation)
+                self.archive.preserve(path, conversation.id)
+            return False
+        path = self.archive.write(conversation)
+        self.db.upsert_conversation(conversation, path)
+        return True
+
+    def sync_now(self) -> dict:
+        from aimemory.sync.cloud_sync import CloudSync
+        return CloudSync(self).run()
 
     def index_archive(self, path: Path) -> NormalizedConversation:
         conversation = self.archive.read(path)
@@ -96,12 +149,22 @@ class MemoryService:
         status["home"] = str(self.paths.home)
         status["archive"] = str(self.paths.archive)
         status["archive_count"] = len(self.archive.iter_archives())
+        config = read_json(self.paths.state / "cloud.json")
         status["storage"] = {
-            "provider": "local-folder",
+            "provider": config.get("provider", "local-folder"),
             "home": str(self.paths.home),
             "archive": str(self.paths.archive),
-            "cloud_sync": "not-configured",
+            "cloud_sync": "configured" if config else "not-configured",
+            "archive_bytes": folder_bytes(self.paths.archive),
+            "normalized_bytes": folder_bytes(self.paths.archive / "sources"),
+            "raw_bytes": folder_bytes(self.paths.archive / "raw"),
+            "revisions_bytes": folder_bytes(self.paths.archive / "snapshots"),
+            "database_bytes": sum(p.stat().st_size for p in self.paths.db.glob("memory.sqlite*")),
+            "total_bytes": folder_bytes(self.paths.home),
+            "remote": config.get("root", "AI-Memory"),
         }
+        status["sync"] = read_json(self.paths.state / "sync-status.json")
+        status["audit"] = read_json(self.paths.state / "audit.json")
         status["watcher"] = self.watcher_status()
         return status
 
@@ -109,6 +172,16 @@ class MemoryService:
         status_path = self.paths.state / "watcher-status.json"
         if not status_path.exists():
             return None
-        import json
+        result = read_json(status_path)
+        from filelock import Timeout
+        try:
+            with FileLock(str(self.paths.state / "watcher.lock"), timeout=0):
+                result["running"] = False
+        except Timeout:
+            result["running"] = True
+        return result
 
-        return json.loads(status_path.read_text(encoding="utf-8"))
+    def audit_codex(self, codex_home: Path | None = None) -> dict:
+        from aimemory.audit import audit_codex
+        with self.lock:
+            return audit_codex(self, codex_home)

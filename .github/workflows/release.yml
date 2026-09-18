@@ -29,17 +29,20 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev,desktop]"
       - run: pytest -q
+      - run: python scripts/fetch_rclone.py
       - name: Build macOS app
         if: runner.os == 'macOS'
         run: |
           pyinstaller --name "AI Memory" --onedir --windowed --collect-all mcp src/aimemory/bootstrap.py
           pyinstaller --name ai-memory-cli --onefile --collect-all mcp src/aimemory/bootstrap.py
           cp "dist/ai-memory-cli" "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"
+          cp vendor/rclone "dist/AI Memory.app/Contents/MacOS/rclone"
+          cp vendor/rclone-COPYING.txt "dist/AI Memory.app/Contents/Resources/rclone-COPYING.txt"
           chmod +x "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"
           codesign --force --deep --sign - "dist/AI Memory.app"
       - name: Build Windows app
         if: runner.os == 'Windows'
-        run: pyinstaller --name "AI Memory" --onefile --collect-all mcp src/aimemory/bootstrap.py
+        run: pyinstaller --name "AI Memory" --onefile --collect-all mcp --add-binary "vendor/rclone.exe;." --add-data "vendor/rclone-COPYING.txt;." src/aimemory/bootstrap.py
       - name: Package macOS
         if: runner.os == 'macOS'
         run: |

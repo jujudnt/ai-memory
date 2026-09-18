@@ -174,7 +174,7 @@ def _launch_agent_status() -> WatcherServiceStatus:
     )
     return WatcherServiceStatus(
         installed=True,
-        running=result.returncode == 0,
+        running=result.returncode == 0 and "state = running" in result.stdout,
         path=str(plist_path),
         detail=(result.stderr or result.stdout).strip()[:500] if result.returncode != 0 else None,
         command=command,

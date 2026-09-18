@@ -12,8 +12,8 @@ The release artifact is intentionally simple:
 Create a release by pushing a tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 GitHub Actions builds:
@@ -30,7 +30,7 @@ The release executable opens a local browser UI. It currently supports:
 - show local storage location
 - view watcher status and recent conversations
 
-V0.1 stores data locally only, under `~/.ai-memory`, until cloud providers are added.
+V0.2 adds Google Drive OAuth, automatic bidirectional synchronization, full raw backups, import verification and storage sizes. The helper is bundled in each release; no separate rclone installation or terminal configuration is required. `scripts/fetch_rclone.py` pins rclone v1.75.1 and checks its SHA-256 before packaging, and includes its MIT license.
 
 This is a functional MVP, not the final polished onboarding app.
 

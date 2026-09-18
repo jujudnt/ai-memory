@@ -53,8 +53,8 @@ class CodexAdapter:
                 )
         return sessions
 
-    def parse_session(self, path: Path) -> NormalizedConversation:
-        records = _read_jsonl(path)
+    def parse_session(self, path: Path, raw: bytes | None = None) -> NormalizedConversation:
+        records = _read_jsonl(path, raw)
         session_meta: dict[str, Any] = {}
         turn_context: dict[str, Any] = {}
         messages: list[Message] = []
@@ -106,9 +106,11 @@ class CodexAdapter:
                 "tool_call",
                 "tool_search_call",
                 "computer_call",
+                "custom_tool_call",
+                "web_search_call",
             }:
                 name = _tool_name(item)
-                arguments = _stringify(item.get("arguments"))
+                arguments = _stringify(item.get("arguments", item.get("input", item.get("action"))))
                 call_id = str(item.get("call_id") or item.get("id") or f"call_{ordinal}")
                 tool_calls.append(
                     ToolCall(
@@ -128,6 +130,7 @@ class CodexAdapter:
                 "function_call_output",
                 "tool_call_output",
                 "tool_search_output",
+                "custom_tool_call_output",
             }:
                 call_id = str(item.get("call_id") or item.get("id") or f"output_{ordinal}")
                 output = _stringify(item.get("output") or item)
@@ -138,8 +141,8 @@ class CodexAdapter:
                 call.output = call_outputs[call.id]
 
         source_session_id = str(
-            session_meta.get("session_id")
-            or session_meta.get("id")
+            session_meta.get("id")
+            or session_meta.get("session_id")
             or _session_id_from_path(path)
         )
         created_at = session_meta.get("timestamp") or _first_timestamp(records)
@@ -172,6 +175,8 @@ class CodexAdapter:
                 "raw_record_count": len(records),
                 "codex_cli_version": session_meta.get("cli_version"),
                 "history_mode": session_meta.get("history_mode"),
+                "parser_version": 2,
+                "session_metadata": session_meta,
             },
         )
 
@@ -179,19 +184,21 @@ class CodexAdapter:
         return conversation.project
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+def _read_jsonl(path: Path, raw: bytes | None = None) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
+    lines = (raw if raw is not None else path.read_bytes()).splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # A live session may end in a partially written record, never skip corruption inside it.
+            if index == len(lines) - 1:
                 continue
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                records.append(value)
+            raise ValueError(f"Invalid JSON in {path.name}, line {index + 1}")
+        if isinstance(value, dict):
+            records.append(value)
     return records
 
 
@@ -301,6 +308,8 @@ def _extract_file_mentions(text: str) -> set[str]:
 def _title_from_messages(messages: list[Message]) -> str | None:
     for message in messages:
         if message.role == "user" and message.content.strip():
+            if message.content.lstrip().startswith(("<environment_context>", "<recommended_plugins>", "# AGENTS.md")):
+                continue
             title = " ".join(message.content.split())
             return title[:120]
     return None

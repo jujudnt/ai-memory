@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import time
+import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from aimemory.service import MemoryService
+from aimemory.state import write_json
+from filelock import FileLock, Timeout
 
 
 @dataclass(slots=True)
@@ -21,6 +24,7 @@ class WatcherStatus:
     imported: int = 0
     skipped: int = 0
     total_scans: int = 0
+    pid: int = 0
 
 
 class WatcherService:
@@ -41,7 +45,13 @@ class WatcherService:
         interval_seconds: float = 10.0,
         once: bool = False,
     ) -> None:
+        lock = FileLock(str(self.service.paths.state / "watcher.lock"), timeout=0)
+        try:
+            lock.acquire()
+        except Timeout:
+            return
         self.status.running = True
+        self.status.pid = os.getpid()
         self.status.started_at = _now()
         self._write_status()
         try:
@@ -53,6 +63,7 @@ class WatcherService:
         finally:
             self.status.running = False
             self._write_status()
+            lock.release()
 
     def scan_once(self, codex_home: Path | None = None) -> None:
         self.status.last_scan_at = _now()
@@ -62,20 +73,28 @@ class WatcherService:
             self.status.scanned = result.scanned
             self.status.imported = result.imported
             self.status.skipped = result.skipped
+            if result.errors:
+                raise RuntimeError(f"{len(result.errors)} import failures: {result.errors[0]['error']}")
             self.status.last_success_at = _now()
             self.status.last_error = None
             self.status.last_error_at = None
+        except Timeout:
+            return  # A manual import, audit or sync currently owns the shared data.
         except Exception as exc:
             self.status.last_error = str(exc)
             self.status.last_error_at = _now()
         self._write_status()
+        # Cloud failures do not erase the collector's independent health signal.
+        if time.monotonic() - getattr(self, "_last_sync", -60) >= 60:
+            self._last_sync = time.monotonic()
+            try:
+                self.service.sync_now()
+            except Exception:
+                pass  # CloudSync persists the failure for the UI and retries next minute.
 
     def _write_status(self) -> None:
         self.status_path.parent.mkdir(parents=True, exist_ok=True)
-        self.status_path.write_text(
-            json.dumps(asdict(self.status), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        write_json(self.status_path, asdict(self.status))
 
 
 def _now() -> str:

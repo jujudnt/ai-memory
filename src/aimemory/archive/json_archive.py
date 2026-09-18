@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import gzip
 import json
+import hashlib
+import re
 from pathlib import Path
 
 from aimemory.models import NormalizedConversation
+from aimemory.state import atomic_write
 
 try:
     import zstandard as zstd
@@ -21,6 +24,8 @@ class JsonArchive:
         return ".json.zst" if zstd else ".json.gz"
 
     def path_for(self, conversation: NormalizedConversation) -> Path:
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", conversation.source) or not re.fullmatch(r"[a-zA-Z0-9_-]+", conversation.id):
+            raise ValueError("Invalid archive identity")
         return (
             self.archive_root
             / "sources"
@@ -35,11 +40,23 @@ class JsonArchive:
         payload = json.dumps(conversation.to_dict(), ensure_ascii=False, sort_keys=True).encode("utf-8")
         if zstd:
             compressor = zstd.ZstdCompressor(level=9)
-            path.write_bytes(compressor.compress(payload))
+            compressed = compressor.compress(payload)
         else:
-            with gzip.open(path, "wb") as handle:
-                handle.write(payload)
+            compressed = gzip.compress(payload, mtime=0)
+        # Retain immutable revisions so simultaneous device edits cannot destroy history.
+        if path.exists():
+            self.preserve(path, conversation.id)
+        atomic_write(path, compressed)
+        self.preserve(path, conversation.id)
         return path
+
+    def preserve(self, path: Path, conversation_id: str) -> Path:
+        payload = path.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        target = self.archive_root / "snapshots" / conversation_id / f"{digest}{''.join(path.suffixes)}"
+        if not target.exists():
+            atomic_write(target, payload)
+        return target
 
     def read(self, path: Path) -> NormalizedConversation:
         if path.suffix == ".zst":
