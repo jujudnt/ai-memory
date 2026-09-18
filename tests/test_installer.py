@@ -38,7 +38,7 @@ def test_frozen_mcp_command_reuses_app_executable():
     with patch("sys.frozen", True, create=True), patch("sys.executable", "/tmp/AI Memory"):
         command, args = resolve_mcp_command()
 
-    assert command == "/tmp/AI Memory"
+    assert Path(command) == Path("/tmp/AI Memory")
     assert args == ["mcp-server"]
 
 
