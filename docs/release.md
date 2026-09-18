@@ -27,7 +27,10 @@ The release executable opens a local browser UI. It currently supports:
 - start watcher for the current session
 - install watcher at login
 - enable MCP in `~/.codex/config.toml`
+- show local storage location
 - view watcher status and recent conversations
+
+V0.1 stores data locally only, under `~/.ai-memory`, until cloud providers are added.
 
 This is a functional MVP, not the final polished onboarding app.
 

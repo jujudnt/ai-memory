@@ -96,6 +96,12 @@ class MemoryService:
         status["home"] = str(self.paths.home)
         status["archive"] = str(self.paths.archive)
         status["archive_count"] = len(self.archive.iter_archives())
+        status["storage"] = {
+            "provider": "local-folder",
+            "home": str(self.paths.home),
+            "archive": str(self.paths.archive),
+            "cloud_sync": "not-configured",
+        }
         status["watcher"] = self.watcher_status()
         return status
 

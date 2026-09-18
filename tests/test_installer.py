@@ -1,7 +1,14 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from aimemory.installer import install_mcp_config, mcp_toml_block, resolve_mcp_command
+from aimemory.installer import (
+    WatcherServiceStatus,
+    install_mcp_config,
+    install_watcher_service,
+    mcp_toml_block,
+    resolve_mcp_command,
+)
+from aimemory.service import MemoryService
 
 
 def test_mcp_toml_block_contains_stdio_command():
@@ -54,3 +61,23 @@ def test_frozen_mcp_command_prefers_bundled_helper(tmp_path: Path):
 
     assert command == str(helper)
     assert args == ["mcp-server"]
+
+
+def test_install_watcher_short_circuits_when_already_running():
+    with patch(
+        "aimemory.installer.get_watcher_service_status",
+        return_value=WatcherServiceStatus(True, True, "/tmp/watcher"),
+    ):
+        result = install_watcher_service()
+
+    assert result.changed is False
+    assert result.message == "Watcher is already installed and running."
+    assert result.path == "/tmp/watcher"
+
+
+def test_status_exposes_local_storage(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AI_MEMORY_HOME", str(tmp_path / "memory"))
+    status = MemoryService().status()
+
+    assert status["storage"]["provider"] == "local-folder"
+    assert status["storage"]["cloud_sync"] == "not-configured"

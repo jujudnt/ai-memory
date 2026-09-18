@@ -8,7 +8,12 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from aimemory.installer import install_mcp_config, install_watcher_service, resolve_aimemory_command
+from aimemory.installer import (
+    get_watcher_service_status,
+    install_mcp_config,
+    install_watcher_service,
+    resolve_aimemory_command,
+)
 from aimemory.service import MemoryService
 
 
@@ -89,7 +94,7 @@ HTML = """<!doctype html>
     }
     .stats {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 12px;
     }
     .stat {
@@ -158,7 +163,12 @@ HTML = """<!doctype html>
         <div class="stat"><b id="archive-count">0</b><span class="muted">Archives</span></div>
         <div class="stat"><b id="project-count">0</b><span class="muted">Projects</span></div>
         <div class="stat"><b id="watcher-state">Unknown</b><span class="muted">Watcher</span></div>
+        <div class="stat"><b id="storage-state">Local</b><span class="muted">Storage</span></div>
       </div>
+    </section>
+    <section class="panel">
+      <h2>Storage</h2>
+      <p id="storage-detail" class="muted">Local folder storage.</p>
     </section>
     <section class="panel">
       <h2>Watcher</h2>
@@ -184,13 +194,18 @@ HTML = """<!doctype html>
       document.querySelector('#archive-count').textContent = data.archive_count ?? 0;
       document.querySelector('#project-count').textContent = data.project_count ?? 0;
       const watcher = data.watcher || null;
-      const state = watcher ? (watcher.running ? 'Running' : 'Stopped') : 'Not installed';
+      const service = data.watcher_service || null;
+      const isRunning = (watcher && watcher.running) || (service && service.running);
+      const state = isRunning ? 'Running' : (service && service.installed ? 'Installed' : (watcher ? 'Stopped' : 'Not installed'));
       const stateEl = document.querySelector('#watcher-state');
       stateEl.textContent = state;
-      stateEl.className = watcher && watcher.last_error ? 'bad' : (watcher ? 'ok' : 'warn');
+      stateEl.className = watcher && watcher.last_error ? 'bad' : (isRunning ? 'ok' : 'warn');
+      const storage = data.storage || {};
+      document.querySelector('#storage-state').textContent = storage.provider === 'local-folder' ? 'Local' : text(storage.provider);
+      document.querySelector('#storage-detail').textContent = `Provider: ${text(storage.provider)} | Data: ${text(storage.home)} | Archive: ${text(storage.archive)} | Cloud sync: ${text(storage.cloud_sync)}`;
       document.querySelector('#watcher-detail').textContent = watcher
-        ? `Last success: ${text(watcher.last_success_at)} | Last scan: ${text(watcher.last_scan_at)} | Scanned/imported/skipped: ${watcher.scanned || 0}/${watcher.imported || 0}/${watcher.skipped || 0}${watcher.last_error ? ' | Error: ' + watcher.last_error : ''}`
-        : 'No watcher status yet.';
+        ? `Installed: ${service && service.installed ? 'yes' : 'no'} | Last success: ${text(watcher.last_success_at)} | Last scan: ${text(watcher.last_scan_at)} | Scanned/imported/skipped: ${watcher.scanned || 0}/${watcher.imported || 0}/${watcher.skipped || 0}${watcher.last_error ? ' | Error: ' + watcher.last_error : ''}`
+        : `Installed: ${service && service.installed ? 'yes' : 'no'} | No watcher import status yet.`;
       const rows = data.recent_conversations || [];
       document.querySelector('#conversations').innerHTML = rows.map(row => `
         <tr>
@@ -239,6 +254,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/status":
             status = self.state.service.status()
+            status["watcher_service"] = get_watcher_service_status().__dict__
             status["recent_conversations"] = self.state.service.list_conversations(limit=25)
             self._send_json(status)
             return
@@ -252,6 +268,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/start-watcher":
             if self.state.watcher_process and self.state.watcher_process.poll() is None:
                 self._send_json({"message": "Watcher is already running from this app."})
+                return
+            service_status = get_watcher_service_status()
+            watcher_status = self.state.service.watcher_status() or {}
+            if service_status.running or watcher_status.get("running"):
+                self._send_json({
+                    "message": "Watcher is already running.",
+                    "watcher_service": service_status.__dict__,
+                })
                 return
             command = [*resolve_aimemory_command(), "watch", "--interval", "10"]
             self.state.watcher_process = subprocess.Popen(command)

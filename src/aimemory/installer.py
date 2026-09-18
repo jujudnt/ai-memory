@@ -22,6 +22,14 @@ class InstallResult:
     path: str | None = None
 
 
+@dataclass(slots=True)
+class WatcherServiceStatus:
+    installed: bool
+    running: bool
+    path: str | None = None
+    detail: str | None = None
+
+
 def resolve_aimemory_command() -> list[str]:
     if getattr(sys, "frozen", False):
         return [str(_bundled_cli_helper() or Path(sys.executable))]
@@ -88,6 +96,10 @@ def mcp_toml_block(
 
 
 def install_watcher_service(interval_seconds: float = 10.0) -> InstallResult:
+    status = get_watcher_service_status()
+    if status.installed and status.running:
+        return InstallResult(False, "Watcher is already installed and running.", status.path)
+
     system = platform.system().lower()
     if system == "darwin":
         return _install_launch_agent(interval_seconds)
@@ -96,6 +108,17 @@ def install_watcher_service(interval_seconds: float = 10.0) -> InstallResult:
     if system == "linux":
         return _install_systemd_user_service(interval_seconds)
     return InstallResult(False, f"Unsupported platform: {platform.system()}")
+
+
+def get_watcher_service_status() -> WatcherServiceStatus:
+    system = platform.system().lower()
+    if system == "darwin":
+        return _launch_agent_status()
+    if system == "windows":
+        return _windows_task_status()
+    if system == "linux":
+        return _systemd_user_status()
+    return WatcherServiceStatus(False, False, detail=f"Unsupported platform: {platform.system()}")
 
 
 def _install_launch_agent(interval_seconds: float) -> InstallResult:
@@ -125,6 +148,26 @@ def _install_launch_agent(interval_seconds: float) -> InstallResult:
     return InstallResult(True, "Watcher LaunchAgent installed and started.", str(plist_path))
 
 
+def _launch_agent_status() -> WatcherServiceStatus:
+    plist_path = Path.home() / "Library" / "LaunchAgents" / f"{WATCHER_LABEL}.plist"
+    installed = plist_path.exists()
+    if not installed:
+        return WatcherServiceStatus(False, False, str(plist_path))
+    uid = os.getuid()
+    result = subprocess.run(
+        ["launchctl", "print", f"gui/{uid}/{WATCHER_LABEL}"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return WatcherServiceStatus(
+        installed=True,
+        running=result.returncode == 0,
+        path=str(plist_path),
+        detail=(result.stderr or result.stdout).strip()[:500] if result.returncode != 0 else None,
+    )
+
+
 def _install_windows_task(interval_seconds: float) -> InstallResult:
     command = " ".join(_quote_win(part) for part in [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)])
     result = subprocess.run(
@@ -146,6 +189,24 @@ def _install_windows_task(interval_seconds: float) -> InstallResult:
     if result.returncode != 0:
         return InstallResult(False, result.stderr.strip() or result.stdout.strip())
     return InstallResult(True, "Watcher scheduled task installed.", "AI Memory Watcher")
+
+
+def _windows_task_status() -> WatcherServiceStatus:
+    result = subprocess.run(
+        ["schtasks", "/Query", "/TN", "AI Memory Watcher", "/FO", "LIST", "/V"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return WatcherServiceStatus(False, False, "AI Memory Watcher", (result.stderr or result.stdout).strip())
+    output = result.stdout
+    return WatcherServiceStatus(
+        installed=True,
+        running="Status:" in output and "Running" in output,
+        path="AI Memory Watcher",
+        detail=output.strip()[:500],
+    )
 
 
 def _install_systemd_user_service(interval_seconds: float) -> InstallResult:
@@ -170,6 +231,20 @@ WantedBy=default.target
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
     subprocess.run(["systemctl", "--user", "enable", "--now", "ai-memory-watcher.service"], check=False)
     return InstallResult(True, "Watcher systemd user service installed.", str(service_path))
+
+
+def _systemd_user_status() -> WatcherServiceStatus:
+    service_path = Path("~/.config/systemd/user/ai-memory-watcher.service").expanduser()
+    active = subprocess.run(
+        ["systemctl", "--user", "is-active", "--quiet", "ai-memory-watcher.service"],
+        check=False,
+    )
+    enabled = subprocess.run(
+        ["systemctl", "--user", "is-enabled", "--quiet", "ai-memory-watcher.service"],
+        check=False,
+    )
+    installed = service_path.exists() or enabled.returncode == 0
+    return WatcherServiceStatus(installed, active.returncode == 0, str(service_path))
 
 
 def _toml_string(value: str) -> str:
