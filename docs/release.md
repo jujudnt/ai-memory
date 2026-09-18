@@ -1,12 +1,13 @@
 # Release Builds
 
-AI Memory ships a first desktop executable through GitHub Releases.
+AI Memory ships a first desktop app through GitHub Releases.
 
 The release artifact is intentionally simple:
 
 - double-click opens the desktop UI
-- `AI Memory watch` runs the local watcher
-- `AI Memory mcp-server` runs the local stdio MCP server for Codex
+- macOS packages `AI Memory.app` with an internal `ai-memory-cli` helper
+- `AI Memory watch` runs the local watcher on Windows and dev installs
+- `AI Memory mcp-server` runs the local stdio MCP server for Codex on Windows and dev installs
 
 Create a release by pushing a tag:
 
@@ -29,3 +30,15 @@ The release executable opens a local browser UI. It currently supports:
 - view watcher status and recent conversations
 
 This is a functional MVP, not the final polished onboarding app.
+
+## macOS Gatekeeper
+
+The macOS build is ad-hoc signed, but it is not notarized with an Apple Developer ID yet. macOS may still show an unidentified developer or malware-verification warning after download.
+
+For this MVP, open it with right-click > Open, or remove quarantine manually:
+
+```bash
+xattr -dr com.apple.quarantine "/path/to/AI Memory.app"
+```
+
+Removing this warning completely requires a paid Apple Developer account, Developer ID signing certificate, and Apple notarization in the release workflow.

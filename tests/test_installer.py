@@ -40,3 +40,17 @@ def test_frozen_mcp_command_reuses_app_executable():
 
     assert command == "/tmp/AI Memory"
     assert args == ["mcp-server"]
+
+
+def test_frozen_mcp_command_prefers_bundled_helper(tmp_path: Path):
+    app_binary = tmp_path / "AI Memory.app" / "Contents" / "MacOS" / "AI Memory"
+    helper = app_binary.with_name("ai-memory-cli")
+    helper.parent.mkdir(parents=True)
+    app_binary.write_text("", encoding="utf-8")
+    helper.write_text("", encoding="utf-8")
+
+    with patch("sys.frozen", True, create=True), patch("sys.executable", str(app_binary)):
+        command, args = resolve_mcp_command()
+
+    assert command == str(helper)
+    assert args == ["mcp-server"]

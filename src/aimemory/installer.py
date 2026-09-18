@@ -24,7 +24,7 @@ class InstallResult:
 
 def resolve_aimemory_command() -> list[str]:
     if getattr(sys, "frozen", False):
-        return [sys.executable]
+        return [str(_bundled_cli_helper() or Path(sys.executable))]
     executable = shutil.which("aimemory")
     if executable:
         return [executable]
@@ -33,7 +33,7 @@ def resolve_aimemory_command() -> list[str]:
 
 def resolve_mcp_command() -> tuple[str, list[str]]:
     if getattr(sys, "frozen", False):
-        return sys.executable, ["mcp-server"]
+        return str(_bundled_cli_helper() or Path(sys.executable)), ["mcp-server"]
     executable = shutil.which("aimemory-mcp")
     if executable:
         return executable, []
@@ -183,3 +183,16 @@ def _quote_shell(value: str) -> str:
 def _quote_win(value: str) -> str:
     escaped = value.replace('"', r"\"")
     return f'"{escaped}"' if " " in escaped else escaped
+
+
+def _bundled_cli_helper() -> Path | None:
+    executable = Path(sys.executable)
+    candidates = [
+        executable.with_name("ai-memory-cli"),
+        executable.with_name("ai-memory-cli.exe"),
+    ]
+    # macOS .app bundle: Contents/MacOS/AI Memory -> Contents/MacOS/ai-memory-cli.
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
