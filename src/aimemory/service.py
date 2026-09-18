@@ -11,6 +11,7 @@ from filelock import FileLock
 from aimemory.adapters import CodexAdapter
 from aimemory.archive import JsonArchive
 from aimemory.archive.raw_backup import write_raw
+from aimemory.cloud.providers import provider_label
 from aimemory.config import AppPaths
 from aimemory.db import MemoryDatabase
 from aimemory.db.sqlite import file_hash
@@ -151,6 +152,7 @@ class MemoryService:
         config = read_json(self.paths.state / "cloud.json")
         status["storage"] = {
             "provider": config.get("provider", "local-folder"),
+            "provider_label": provider_label(config.get("provider")),
             "home": str(self.paths.home),
             "archive": str(self.paths.archive),
             "cloud_sync": "configured" if config else "not-configured",

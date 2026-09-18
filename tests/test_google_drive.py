@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aimemory.cloud.google_drive import GoogleDriveProvider, rclone_binary
+from aimemory.cloud.google_drive import GoogleDriveProvider, _friendly_google_error, rclone_binary
 from aimemory.config import AppPaths
 from aimemory.state import read_json
 
@@ -53,3 +53,10 @@ def test_real_rclone_exchange_reports_progress(tmp_path):
     assert (remote / "a.txt").read_text() == "local file"
     assert {phase for phase, stats in phases} == {"uploading", "downloading"}
     assert any(stats.get("bytes", 0) > 0 for phase, stats in phases)
+
+
+def test_google_quota_errors_are_actionable():
+    message = _friendly_google_error("storageQuotaExceeded: The user's Drive storage quota has been exceeded", 1)
+
+    assert "Google Drive est plein" in message
+    assert "iCloud" in message

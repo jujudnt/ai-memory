@@ -7,6 +7,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
+from aimemory.cloud.providers import provider_label
 from aimemory.health import watcher_health
 from aimemory.state import read_json, write_json
 
@@ -83,7 +84,7 @@ def run_menubar(service, url: str) -> None:
                 scan_item.setTitle_(f"Dernier scan : {last}")
                 cloud_label = "Cloud non connect\u00e9"
                 if cloud:
-                    provider = "Google Drive" if cloud.get("provider") == "google-drive" else "Dossier cloud"
+                    provider = provider_label(cloud.get("provider"))
                     phase = {"synced": "\u00e0 jour", "error": "erreur", "preparing": "pr\u00e9paration", "verifying": "v\u00e9rification"}.get(sync.get("status"), "synchronisation")
                     cloud_label = f"{provider} : {phase}"
                 cloud_item.setTitle_(cloud_label)

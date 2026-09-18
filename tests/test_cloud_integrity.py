@@ -173,3 +173,20 @@ def test_cloud_restores_append_delta_backups(tmp_path):
     b.sync_now()
     assert read_raw(b.paths.archive, entry["raw_path"]) == path.read_bytes()
     assert b.search("new answer")
+
+
+def test_local_cloud_provider_reports_insufficient_space(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from aimemory.sync.cloud_sync import _ensure_available_space
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    destination.mkdir()
+    (source / "big.bin").write_bytes(b"x" * 1024)
+    monkeypatch.setattr(
+        "aimemory.sync.cloud_sync.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=16),
+    )
+
+    with pytest.raises(RuntimeError, match="Espace insuffisant"):
+        _ensure_available_space(source, destination)

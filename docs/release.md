@@ -12,8 +12,8 @@ The release artifact is intentionally simple:
 Create a release by pushing a tag:
 
 ```bash
-git tag v0.3.1
-git push origin v0.3.1
+git tag v0.3.2
+git push origin v0.3.2
 ```
 
 GitHub Actions builds:
@@ -32,6 +32,8 @@ The release executable opens a local browser UI. It currently supports:
 V0.2 adds Google Drive OAuth, automatic bidirectional synchronization, full raw backups, import verification and storage sizes. The helper is bundled in each release; no separate rclone installation or terminal configuration is required. `scripts/fetch_rclone.py` pins rclone v1.75.1 and checks its SHA-256 before packaging, and includes its MIT license.
 
 V0.3 adds the simplified dashboard and native macOS menu-bar companion. macOS desktop dependencies include PyObjC Cocoa. Local HTML, CSS, JavaScript and MIT-licensed Lucide icons are bundled with `--collect-data aimemory`; there is no CDN request at runtime. `LSUIElement` keeps the companion out of the Dock. The watcher runs independently: quitting the menu interface does not stop collection. Login launch is managed by a separate `io.github.jujudnt.ai-memory.menubar` LaunchAgent and can be disabled in settings.
+
+V0.3.2 adds iCloud Drive, OneDrive, Dropbox and custom synchronized-folder destinations through local provider folders, plus clearer Google Drive quota-full errors.
 
 ## macOS Gatekeeper
 

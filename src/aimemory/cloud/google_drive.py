@@ -48,7 +48,7 @@ class GoogleDriveProvider:
             # OAuth/config output can contain credentials; never return it to the UI or logs.
             if args[0] == "config":
                 raise RuntimeError("Google authorization failed or was cancelled. Please reconnect.")
-            raise RuntimeError(f"Google Drive operation failed (code {result.returncode}). Check your connection and reconnect if access was revoked.")
+            raise RuntimeError(_friendly_google_error(result.stderr, result.returncode))
         return result.stdout
 
     def connect(self, oauth_client: dict | None = None) -> None:
@@ -112,7 +112,7 @@ class GoogleDriveProvider:
                     if time.monotonic() - started > 3600:
                         raise TimeoutError("Google Drive transfer timed out. Completed files are preserved; retry sync.")
                 if process.returncode:
-                    raise RuntimeError("Google Drive transfer failed. Check your connection or reconnect Google Drive.")
+                    raise RuntimeError(_friendly_google_error(output, process.returncode))
             finally:
                 if process.poll() is None:
                     process.kill()
@@ -121,3 +121,25 @@ class GoogleDriveProvider:
     def disconnect(self) -> None:
         self.config.unlink(missing_ok=True)
         (self.paths.state / "cloud.json").unlink(missing_ok=True)
+
+
+def _friendly_google_error(output: str | bytes | None, code: int) -> str:
+    text = (output or "").decode("utf-8", "ignore") if isinstance(output, bytes) else (output or "")
+    lowered = text.lower()
+    full_markers = (
+        "storagequotaexceeded",
+        "insufficient storage",
+        "not enough space",
+        "storage quota",
+        "quota bytes",
+        "drive storage",
+        "cannotuploadfile",
+    )
+    if any(marker in lowered for marker in full_markers):
+        return (
+            "Google Drive est plein. Libérez de l'espace, changez de destination cloud, "
+            "ou déconnectez Google Drive puis choisissez iCloud/OneDrive/Dropbox."
+        )
+    if "rate limit" in lowered or "user rate limit exceeded" in lowered:
+        return "Google Drive limite temporairement les transferts. Réessayez dans quelques minutes."
+    return f"Google Drive operation failed (code {code}). Check your connection and reconnect if access was revoked."

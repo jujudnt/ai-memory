@@ -22,6 +22,7 @@ from aimemory.installer import (
 )
 from aimemory.service import MemoryService
 from aimemory.cloud.google_drive import GoogleDriveProvider
+from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, resolve_folder_root, validate_sync_root
 from aimemory.state import read_json, write_json
 from aimemory.health import watcher_health
 
@@ -123,13 +124,9 @@ class Handler(BaseHTTPRequestHandler):
                 if provider == "google-drive":
                     with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
                         GoogleDriveProvider(self.state.service.paths).connect(self.body.get("oauth_client"))
-                elif provider == "local-folder":
-                    if not folder.strip():
-                        raise ValueError("Choose a folder first")
-                    root = Path(folder).expanduser().resolve()
-                    home = self.state.service.paths.home.resolve()
-                    if root == home or home in root.parents or root in home.parents:
-                        raise ValueError("Choose a folder outside AI Memory's data folder")
+                elif provider in LOCAL_FOLDER_PROVIDERS:
+                    root = resolve_folder_root(provider, folder)
+                    validate_sync_root(root, self.state.service.paths.home)
                     root.mkdir(parents=True, exist_ok=True)
                     with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
                         write_json(self.state.service.paths.state / "cloud.json", {"provider": provider, "root": str(root)})
@@ -140,7 +137,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/disconnect-cloud":
             with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
-                GoogleDriveProvider(self.state.service.paths).disconnect()
+                config = read_json(self.state.service.paths.state / "cloud.json")
+                if config.get("provider") == "google-drive":
+                    GoogleDriveProvider(self.state.service.paths).disconnect()
+                else:
+                    (self.state.service.paths.state / "cloud.json").unlink(missing_ok=True)
                 write_json(self.state.service.paths.state / "sync-status.json", {"status": "disconnected"})
             self._send_json({"message": "Deconnecte. Les sauvegardes locales et distantes sont conservees."})
             return

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 from pathlib import Path
 from filelock import FileLock
 
 from aimemory.cloud.google_drive import GoogleDriveProvider
+from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, validate_sync_root
 from aimemory.archive.raw_backup import RAW_PATTERN, read_raw
 from aimemory.state import atomic_write, now, read_json, write_json
 
@@ -39,12 +41,12 @@ class CloudSync:
                                 atomic_write(target, path.read_bytes())
                 if config["provider"] == "google-drive":
                     GoogleDriveProvider(self.paths).exchange(exchange, progress)
-                elif config["provider"] == "local-folder":
+                elif config["provider"] in LOCAL_FOLDER_PROVIDERS:
                     remote = Path(config["root"]).expanduser().resolve()
-                    if remote == self.paths.home.resolve() or self.paths.home.resolve() in remote.parents or remote in self.paths.home.resolve().parents:
-                        raise ValueError("Sync folder must be separate from AI Memory's data folder.")
+                    validate_sync_root(remote, self.paths.home)
                     for source, destination, phase in ((exchange, remote, "uploading"), (remote, exchange, "downloading")):
                         progress(phase)
+                        _ensure_available_space(source, destination)
                         for path in source.rglob("*"):
                             if path.is_file() and not path.is_symlink() and not path.name.startswith("."):
                                 target = destination / path.relative_to(source)
@@ -97,3 +99,24 @@ class CloudSync:
             finally:
                 write_json(self.status_path, status)
             return status
+
+
+def _ensure_available_space(source: Path, destination: Path) -> None:
+    missing = 0
+    for path in source.rglob("*"):
+        if path.is_file() and not path.is_symlink() and not path.name.startswith("."):
+            target = destination / path.relative_to(source)
+            if not target.exists():
+                missing += path.stat().st_size
+    if not missing:
+        return
+    probe = destination
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    free = shutil.disk_usage(probe).free
+    reserve = max(100 * 1024 * 1024, missing // 20)
+    if free < missing + reserve:
+        raise RuntimeError(
+            "Espace insuffisant sur la destination cloud locale. "
+            "Libérez de l'espace ou choisissez une autre destination."
+        )

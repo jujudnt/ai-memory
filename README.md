@@ -2,7 +2,7 @@
 
 Portable memory for AI coding assistants.
 
-AI Memory backs up Codex conversations, synchronizes them to your Google Drive, indexes them locally, and exposes their history through MCP. Download the desktop application from [GitHub Releases](https://github.com/jujudnt/ai-memory/releases).
+AI Memory backs up Codex conversations, synchronizes them to Google Drive or a local cloud folder such as iCloud Drive, OneDrive or Dropbox, indexes them locally, and exposes their history through MCP. Download the desktop application from [GitHub Releases](https://github.com/jujudnt/ai-memory/releases).
 
 This repository intentionally starts with the data-safe core:
 
@@ -11,6 +11,7 @@ This repository intentionally starts with the data-safe core:
 - Stable normalized JSON archives under `archive/sources/<source>/sessions`
 - Local SQLite metadata plus FTS5 search under `db/memory.sqlite`
 - Google Drive browser authorization through the bundled rclone helper
+- iCloud Drive, OneDrive, Dropbox and custom synchronized-folder destinations
 - Automatic bidirectional synchronization of immutable archives, with checksum verification
 - Full compressed source backups, preserved conversation revisions, and an import integrity audit
 - Local-folder synchronization, also usable with a folder managed by iCloud, OneDrive or Dropbox
@@ -28,7 +29,7 @@ For the release application:
 
 1. Extract the zip. On macOS, move `AI Memory.app` to Applications before installing the watcher or enabling MCP.
 2. Open the app and click **Activer** beside the collector. Historical sessions are imported automatically; the collector continues after the UI closes.
-3. Click **Connecter**, select **Google Drive**, then **Connecter Google Drive**. Complete the browser authorization, which appears under the name **rclone**. The app uses `drive.file` access and creates the `AI-Memory` folder.
+3. Click **Connecter**, then choose **Google Drive**, **iCloud Drive**, **OneDrive**, **Dropbox** or **Autre dossier synchronise**. Google Drive opens a browser authorization under the name **rclone** and creates the `AI-Memory` folder. The other providers use the official local sync folder already installed on the Mac.
 4. Open **Reglages** (the settings icon), activate **MCP pour Codex**, and restart the Codex client so it reads its updated configuration.
 5. Under **Verification et diagnostics**, use **Verifier les copies** to compare original Codex files with raw backups and normalized messages/tool calls. Active sessions can change during the check and are reported separately.
 
@@ -36,7 +37,9 @@ On macOS, the layered memory icon stays in the menu bar when the browser closes.
 
 On a second computer, connect the same Google account and let synchronization finish. Its local search index is built from the downloaded archives. Neither SQLite nor Google credentials are uploaded. Synchronization does not delete cloud history or restore conversations into Codex's native sidebar.
 
-Google Drive transfers run after connection, with the synchronization icon, or every minute while the watcher is running. The first full backup can be large. The UI reports bytes transferred, speed, last activity, errors, and last success. Interrupted copies resume by skipping immutable objects already present.
+Cloud transfers run after connection, with the synchronization icon, or every minute while the watcher is running. The first full backup can be large. The UI reports bytes transferred, speed, last activity, errors, and last success. Interrupted copies resume by skipping immutable objects already present.
+
+If Google Drive is full, AI Memory stops the transfer with an explicit quota message. Free space in Google Drive, disconnect and choose another destination, or use iCloud Drive/OneDrive/Dropbox if those clients have available storage. Folder-based providers check local free space before copying; their official client then handles the cloud upload.
 
 Cloud archives are **not end-to-end encrypted** in this version. Google tokens are stored in the local `credentials` directory, restricted to the local user on macOS/Linux. Disconnect removes the local authorization and keeps both local and remote backups; revoke rclone access in your Google account to revoke the grant itself.
 
@@ -72,7 +75,7 @@ export AI_MEMORY_HOME=/path/to/local/state
 
 ## Current Scope
 
-This release implements the Codex + Google Drive + local MCP flow. It is not the entire V1 specification:
+This release implements the Codex + Google Drive/folder-cloud + local MCP flow. It is not the entire V1 specification:
 
 1. Parse Codex sessions.
 2. Normalize them into a source-independent schema.
@@ -84,7 +87,7 @@ This release implements the Codex + Google Drive + local MCP flow. It is not the
 8. Track watcher health for the future desktop app.
 9. Package a first desktop executable through GitHub Releases.
 
-Still pending: semantic/vector search, native tray UI, filesystem event collection instead of polling, direct OAuth for other providers, private GitHub storage, optional end-to-end encryption, and Apple Developer ID signing/notarization.
+Still pending: semantic/vector search, filesystem event collection instead of polling, direct OAuth for non-Google providers, private GitHub storage, optional end-to-end encryption, and Apple Developer ID signing/notarization.
 
 ### Storage layout
 

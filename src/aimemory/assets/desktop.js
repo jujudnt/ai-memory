@@ -6,7 +6,7 @@ let requestBusy = false;
 let lastJobMessage = "";
 const size = (value) => {
   const n = Math.max(0, Number(value || 0));
-  const units = ["o", "Kio", "Mio", "Gio", "Tio"];
+  const units = ["o", "Ko", "Mo", "Go", "To"];
   const i = Math.min(4, Math.floor(Math.log(Math.max(n, 1)) / Math.log(1024)));
   return `${(n / 1024 ** i).toLocaleString("fr-FR", { maximumFractionDigits: i ? 1 : 0 })} ${units[i]}`;
 };
@@ -32,6 +32,25 @@ const elapsed = (value) => {
       : seconds < 3600
         ? `il y a ${Math.floor(seconds / 60)} min`
         : date(value);
+};
+const providerNames = {
+  "google-drive": "Google Drive",
+  "icloud-drive": "iCloud Drive",
+  onedrive: "OneDrive",
+  dropbox: "Dropbox",
+  "local-folder": "Dossier synchronis\u00e9",
+};
+const providerNotes = {
+  "google-drive":
+    "Connexion directe Google Drive via rclone. Si Drive est plein, la sauvegarde s'arr\u00eate et vous pouvez lib\u00e9rer de l'espace ou changer de destination.",
+  "icloud-drive":
+    "Sauvegarde dans iCloud Drive via le dossier local du Mac. iCloud g\u00e8re ensuite l'envoi vers le cloud.",
+  onedrive:
+    "Sauvegarde dans le dossier OneDrive local. OneDrive doit \u00eatre install\u00e9 et connect\u00e9 sur ce Mac.",
+  dropbox:
+    "Sauvegarde dans le dossier Dropbox local. Dropbox doit \u00eatre install\u00e9 et connect\u00e9 sur ce Mac.",
+  "local-folder":
+    "Choisissez un dossier local, externe ou synchronis\u00e9. L'app v\u00e9rifie l'espace libre avant de copier.",
 };
 function notice(message, error = false) {
   for (const selector of ["#message", "#settings-message"]) {
@@ -120,9 +139,9 @@ function render(data) {
     ? " Sur votre Mac"
     : " Sur cet ordinateur";
   const provider =
-    storage.provider === "google-drive"
-      ? "Google Drive"
-      : "Dossier synchronis\u00e9";
+    storage.provider_label ||
+    providerNames[storage.provider] ||
+    "Sauvegarde cloud";
   $("#cloud-title").textContent = configured ? provider : "Sauvegarde cloud";
   const phases = {
     preparing: "Pr\u00e9paration",
@@ -184,7 +203,8 @@ function render(data) {
     item.className = "conversation";
     item.innerHTML =
       '<i data-lucide="message-square"></i><div class="conversation-copy"><div class="conversation-title"></div><div class="conversation-source"></div></div><time></time>';
-    const title = row.latest_user_message || row.title || row.source_session_id || row.id;
+    const title =
+      row.latest_user_message || row.title || row.source_session_id || row.id;
     item.querySelector(".conversation-title").textContent = title;
     item.querySelector(".conversation-title").title = title;
     item.querySelector(".conversation-source").textContent =
@@ -263,15 +283,15 @@ $("#menubar-login").addEventListener("change", async (event) => {
 });
 $("#provider").addEventListener("change", (event) => {
   const google = event.target.value === "google-drive";
-  $("#folder-label").hidden = google;
+  const customFolder = event.target.value === "local-folder";
+  $("#folder-label").hidden = !customFolder;
   $("#oauth-settings").hidden = !google;
-  $('[data-action="connect-cloud"]').textContent = google
-    ? "Connecter Google Drive"
-    : "Connecter le dossier";
-  $("#provider-note").textContent = google
-    ? "Autorisation Google via rclone. Les sauvegardes ne sont pas chiffr\u00e9es de bout en bout."
-    : "Dossier local ou d\u00e9j\u00e0 synchronis\u00e9 par iCloud, OneDrive ou Dropbox. Sans chiffrement de bout en bout.";
+  const label = providerNames[event.target.value] || "la destination";
+  $('[data-action="connect-cloud"]').textContent = `Connecter ${label}`;
+  $("#provider-note").textContent =
+    providerNotes[event.target.value] || providerNotes["local-folder"];
 });
+$("#provider").dispatchEvent(new Event("change"));
 icons();
 async function poll() {
   await refresh();
