@@ -16,7 +16,8 @@ This repository intentionally starts with the data-safe core:
 - Local-folder synchronization, also usable with a folder managed by iCloud, OneDrive or Dropbox
 - A real stdio MCP server entry point through `aimemory-mcp`
 - A polling watcher with a status file that a desktop UI can display
-- A first local-browser desktop UI for importing, enabling MCP, installing the watcher, and checking status
+- A compact local dashboard with settings for Drive, MCP and diagnostics
+- A native macOS menu-bar icon with watcher health, last scan, login startup and single-instance protection
 - Archive size, index size, total local storage, cloud transfer progress and last successful synchronization
 
 No hosted backend, paid embedding API, or proprietary vector service is required.
@@ -26,18 +27,20 @@ No hosted backend, paid embedding API, or proprietary vector service is required
 For the release application:
 
 1. Extract the zip. On macOS, move `AI Memory.app` to Applications before installing the watcher or enabling MCP.
-2. Open the app and click **Install Watcher**. Historical sessions are imported automatically; the collector continues after the UI closes.
-3. Select **Google Drive** and click **Connect Google Drive**. Complete the browser authorization, which appears under the name **rclone**. The app uses `drive.file` access and creates the `AI-Memory` folder.
-4. Click **Enable MCP** and restart the Codex client so it reads its updated configuration.
-5. Use **Verify conversations** to compare original Codex files with raw backups and normalized messages/tool calls. Active sessions can change during the check and are reported separately.
+2. Open the app and click **Activer** beside the collector. Historical sessions are imported automatically; the collector continues after the UI closes.
+3. Click **Connecter**, select **Google Drive**, then **Connecter Google Drive**. Complete the browser authorization, which appears under the name **rclone**. The app uses `drive.file` access and creates the `AI-Memory` folder.
+4. Open **Reglages** (the settings icon), activate **MCP pour Codex**, and restart the Codex client so it reads its updated configuration.
+5. Under **Verification et diagnostics**, use **Verifier les copies** to compare original Codex files with raw backups and normalized messages/tool calls. Active sessions can change during the check and are reported separately.
+
+On macOS, the layered memory icon stays in the menu bar when the browser closes. Click it to see the last successful scan or reopen the dashboard. A filled icon means collection is healthy; an outlined icon means inactive/starting; a warning triangle means a collection error, a cloud error, or no successful collection for more than two minutes (a long import can also trigger this warning). The menu-bar interface starts at login by default, independently of the watcher service. Disable its login switch in settings to opt out. **Quitter l'interface** closes the icon and local dashboard, not the installed watcher. Opening the app again reuses the existing instance instead of creating duplicate icons. The menu-bar feature is macOS-only; Windows keeps the browser dashboard.
 
 On a second computer, connect the same Google account and let synchronization finish. Its local search index is built from the downloaded archives. Neither SQLite nor Google credentials are uploaded. Synchronization does not delete cloud history or restore conversations into Codex's native sidebar.
 
-Google Drive transfers run after connection, with **Sync now**, or every minute while the watcher is running. The first full backup can be large. The UI reports bytes transferred, speed, last activity, errors, and last success. Interrupted copies resume by skipping immutable objects already present.
+Google Drive transfers run after connection, with the synchronization icon, or every minute while the watcher is running. The first full backup can be large. The UI reports bytes transferred, speed, last activity, errors, and last success. Interrupted copies resume by skipping immutable objects already present.
 
 Cloud archives are **not end-to-end encrypted** in this version. Google tokens are stored in the local `credentials` directory, restricted to the local user on macOS/Linux. Disconnect removes the local authorization and keeps both local and remote backups; revoke rclone access in your Google account to revoke the grant itself.
 
-**Google OAuth:** rclone's shared Google client is being retired during 2026. The default flow is available for testing while it remains active. For durable use, create a Desktop OAuth client following [rclone's official instructions](https://rclone.org/drive/#making-your-own-client-id), then select its JSON under **Google OAuth settings** before connecting. Use the same OAuth client on all computers. A different OAuth client cannot see files created under the old `drive.file` grant, so keep local backups when migrating.
+**Google OAuth:** rclone's shared Google client is being retired during 2026. The default flow is available for testing while it remains active. For durable use, create a Desktop OAuth client following [rclone's official instructions](https://rclone.org/drive/#making-your-own-client-id), then select its JSON under **Client OAuth personnel** before connecting. Use the same OAuth client on all computers. A different OAuth client cannot see files created under the old `drive.file` grant, so keep local backups when migrating.
 
 For development:
 

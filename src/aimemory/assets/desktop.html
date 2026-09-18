@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Memory</title>
+    <link rel="stylesheet" href="/assets/desktop.css" />
+    <script src="/assets/lucide.min.js" defer></script>
+    <script src="/assets/desktop.js" defer></script>
+  </head>
+  <body data-token="__API_TOKEN__">
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="AI Memory, accueil"
+        ><span class="brand-mark"><i data-lucide="layers-2"></i></span
+        ><span>AI Memory</span></a
+      >
+      <div class="header-end">
+        <span class="local-label"
+          ><i data-lucide="lock-keyhole"></i> Sur votre Mac</span
+        ><button
+          class="icon-button"
+          id="settings-open"
+          title="R&eacute;glages"
+          aria-label="R&eacute;glages"
+        >
+          <i data-lucide="settings-2"></i>
+        </button>
+      </div>
+    </header>
+    <main>
+      <section class="overview" aria-labelledby="overview-title">
+        <div class="eyebrow">VOTRE M&Eacute;MOIRE CODEX</div>
+        <div class="overview-heading">
+          <div>
+            <h1 id="overview-title">Vos conversations.</h1>
+            <p class="muted" id="overview-subtitle">
+              Lecture de votre biblioth&egrave;que&hellip;
+            </p>
+          </div>
+          <span class="status-badge" id="health-badge"
+            ><span class="dot"></span
+            ><span id="health-label">Connexion&hellip;</span></span
+          >
+        </div>
+        <div class="metrics">
+          <div>
+            <span class="metric-label">Conversations</span
+            ><strong id="conversation-count">&mdash;</strong>
+          </div>
+          <div>
+            <span class="metric-label">Projets</span
+            ><strong id="project-count">&mdash;</strong>
+          </div>
+          <div>
+            <span class="metric-label">Dossier des conversations</span
+            ><strong id="archive-size">&mdash;</strong>
+          </div>
+          <button
+            class="icon-button"
+            data-action="open-folder"
+            title="Ouvrir le dossier des conversations"
+            aria-label="Ouvrir le dossier des conversations"
+          >
+            <i data-lucide="folder-open"></i>
+          </button>
+        </div>
+      </section>
+      <section class="connections" aria-label="Collecte et sauvegarde">
+        <div class="connection">
+          <span class="connection-icon mint"
+            ><i data-lucide="activity"></i
+          ></span>
+          <div class="connection-copy">
+            <h2 id="watcher-title">Collecte automatique</h2>
+            <p id="watcher-detail">Lecture de l'activit&eacute;&hellip;</p>
+          </div>
+          <button
+            class="compact"
+            data-action="install-watcher"
+            id="watcher-enable"
+            hidden
+          >
+            Activer</button
+          ><span id="watcher-check" class="state-symbol" hidden
+            ><i data-lucide="check"></i
+          ></span>
+        </div>
+        <div class="connection">
+          <span class="connection-icon sky"><i data-lucide="cloud"></i></span>
+          <div class="connection-copy">
+            <h2 id="cloud-title">Sauvegarde cloud</h2>
+            <p id="cloud-detail">Lecture de la connexion&hellip;</p>
+            <progress
+              id="cloud-progress"
+              max="100"
+              value="0"
+              hidden
+              aria-label="Progression de la sauvegarde"
+            ></progress>
+          </div>
+          <button class="compact" id="cloud-setup" hidden>Connecter</button
+          ><button
+            class="icon-button"
+            data-action="sync"
+            title="Synchroniser maintenant"
+            aria-label="Synchroniser maintenant"
+            hidden
+          >
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+      </section>
+      <div id="message" role="status" hidden></div>
+      <section class="history" aria-labelledby="recent-title">
+        <div class="section-heading">
+          <h2 id="recent-title">Conversations r&eacute;centes</h2>
+          <span id="history-count" class="muted"></span>
+        </div>
+        <div id="conversations" class="conversation-list">
+          <p class="empty">Chargement&hellip;</p>
+        </div>
+      </section>
+      <footer>
+        <span><span class="tiny-dot"></span> Stockage local</span
+        ><span id="footer-size"></span><span>v0.3.0</span>
+      </footer>
+    </main>
+    <dialog id="settings" aria-labelledby="settings-title">
+      <div class="dialog-header">
+        <h2 id="settings-title">R&eacute;glages</h2>
+        <button
+          class="icon-button"
+          id="settings-close"
+          title="Fermer"
+          aria-label="Fermer"
+        >
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <section class="setting-section">
+          <h3>Connexions</h3>
+          <div class="setting-row">
+            <div>
+              <b>MCP pour Codex</b>
+              <p id="mcp-status">Lecture&hellip;</p>
+            </div>
+            <button class="compact" data-action="install-mcp" id="mcp-enable">
+              Activer
+            </button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <b>Collecte au d&eacute;marrage</b>
+              <p id="autostart-status"></p>
+            </div>
+            <button
+              class="compact"
+              data-action="install-watcher"
+              id="autostart-enable"
+            >
+              Activer
+            </button>
+          </div>
+          <div class="setting-row" id="menubar-setting" hidden>
+            <div>
+              <b>Ic&ocirc;ne dans la barre de menus</b>
+              <p>Lancement &agrave; l'ouverture de session</p>
+            </div>
+            <input
+              type="checkbox"
+              role="switch"
+              id="menubar-login"
+              aria-label="Lancer l'ic&ocirc;ne &agrave; l'ouverture de session"
+            />
+          </div>
+        </section>
+        <section class="setting-section">
+          <h3>Sauvegarde cloud</h3>
+          <p id="cloud-summary" class="muted"></p>
+          <div id="cloud-connect-form">
+            <label for="provider">Destination</label
+            ><select id="provider">
+              <option value="google-drive">Google Drive</option>
+              <option value="local-folder">Dossier synchronis&eacute;</option>
+            </select>
+            <label id="folder-label" hidden
+              >Chemin du dossier<input
+                id="folder"
+                placeholder="/Users/nom/Cloud/AI-Memory"
+            /></label>
+            <p class="muted small" id="provider-note">
+              Autorisation Google via rclone. Les sauvegardes ne sont pas
+              chiffr&eacute;es de bout en bout.
+            </p>
+            <details id="oauth-settings">
+              <summary>Client OAuth personnel</summary>
+              <p class="muted small">
+                Pour une connexion durable, utilisez votre propre client OAuth
+                Google de type Desktop. Changer de client peut n&eacute;cessiter
+                de renvoyer les archives.
+              </p>
+              <label
+                >Fichier JSON<input
+                  id="oauth-client"
+                  type="file"
+                  accept="application/json,.json" /></label
+              ><a
+                href="https://rclone.org/drive/#making-your-own-client-id"
+                target="_blank"
+                rel="noreferrer"
+                >Configurer un client Google</a
+              >
+            </details>
+            <button class="primary" data-action="connect-cloud">
+              Connecter Google Drive
+            </button>
+          </div>
+          <details id="cloud-manage" hidden>
+            <summary>G&eacute;rer la connexion</summary>
+            <p id="cloud-last" class="muted small"></p>
+            <button class="compact danger" data-action="disconnect-cloud">
+              D&eacute;connecter
+            </button>
+          </details>
+        </section>
+        <section class="setting-section">
+          <h3>Stockage local</h3>
+          <dl class="storage-details">
+            <div>
+              <dt>Conversations et versions</dt>
+              <dd id="settings-archive-size"></dd>
+            </div>
+            <div>
+              <dt>Index de recherche</dt>
+              <dd id="db-size"></dd>
+            </div>
+            <div>
+              <dt>Total sur cet ordinateur</dt>
+              <dd id="total-size"></dd>
+            </div>
+          </dl>
+          <code id="archive-path"></code>
+        </section>
+        <details class="setting-section diagnostics">
+          <summary>V&eacute;rification et diagnostics</summary>
+          <p id="audit-detail" class="muted small"></p>
+          <p id="watcher-diagnostic" class="muted small"></p>
+          <div class="actions">
+            <button class="compact" data-action="audit">
+              <i data-lucide="shield-check"></i> V&eacute;rifier les copies</button
+            ><button class="compact" data-action="import">
+              <i data-lucide="download"></i> Importer maintenant
+            </button>
+          </div>
+        </details>
+        <p id="settings-message" class="small" role="status" hidden></p>
+      </div>
+    </dialog>
+  </body>
+</html>

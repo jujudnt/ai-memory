@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-memory"
-version = "0.2.3"
+version = "0.3.0"
 description = "Local-first portable memory for AI coding assistant conversations."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,7 +17,7 @@ zstd = ["zstandard>=0.23"]
 watch = ["watchdog>=4"]
 mcp = ["mcp>=1.12.4"]
 dev = ["pytest>=8", "zstandard>=0.23", "mcp>=1.12.4"]
-desktop = ["pyinstaller>=6.0", "mcp[cli]>=1.12.4"]
+desktop = ["pyinstaller>=6.0", "mcp[cli]>=1.12.4", "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'"]
 
 [project.scripts]
 aimemory = "aimemory.cli:main"

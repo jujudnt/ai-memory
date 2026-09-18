@@ -12,8 +12,8 @@ The release artifact is intentionally simple:
 Create a release by pushing a tag:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 GitHub Actions builds:
@@ -23,16 +23,15 @@ GitHub Actions builds:
 
 The release executable opens a local browser UI. It currently supports:
 
-- import now
-- start watcher for the current session
-- install watcher at login
-- enable MCP in `~/.codex/config.toml`
-- show local storage location
-- view watcher status and recent conversations
+- a compact French dashboard with archive size and live watcher/cloud health
+- one action to enable automatic collection, including historical sessions
+- settings for Google Drive, MCP, login startup, import and integrity checks
+- a native macOS status item that remains when the browser closes
+- single-instance protection and background login startup without opening a browser
 
 V0.2 adds Google Drive OAuth, automatic bidirectional synchronization, full raw backups, import verification and storage sizes. The helper is bundled in each release; no separate rclone installation or terminal configuration is required. `scripts/fetch_rclone.py` pins rclone v1.75.1 and checks its SHA-256 before packaging, and includes its MIT license.
 
-This is a functional MVP, not the final polished onboarding app.
+V0.3 adds the simplified dashboard and native macOS menu-bar companion. macOS desktop dependencies include PyObjC Cocoa. Local HTML, CSS, JavaScript and MIT-licensed Lucide icons are bundled with `--collect-data aimemory`; there is no CDN request at runtime. `LSUIElement` keeps the companion out of the Dock. The watcher runs independently: quitting the menu interface does not stop collection. Login launch is managed by a separate `io.github.jujudnt.ai-memory.menubar` LaunchAgent and can be disabled in settings.
 
 ## macOS Gatekeeper
 
