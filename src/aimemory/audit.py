@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 
 from aimemory.adapters.codex import CodexAdapter
+from aimemory.archive.raw_backup import read_raw
 from aimemory.config import default_codex_home
 from aimemory.state import now, read_json, write_json
 
@@ -26,7 +27,7 @@ def audit_codex(service, codex_home: Path | None = None) -> dict:
             parsed = adapter.parse_session(session.path, raw)
             ids.add(parsed.source_session_id)
             digest = hashlib.sha256(raw).hexdigest()
-            restored = gzip.decompress((service.paths.archive / entry["raw_path"]).read_bytes())
+            restored = read_raw(service.paths.archive, entry["raw_path"])
             if hashlib.sha256(restored).hexdigest() != entry.get("sha256"):
                 raise ValueError("Raw backup checksum differs from the imported snapshot")
             if entry.get("sha256") != digest:

@@ -152,3 +152,24 @@ def test_audit_checks_captured_backup_even_when_session_has_advanced(tmp_path):
     next((service.paths.archive / "raw").rglob("*.gz")).write_bytes(gzip.compress(b"bad"))
     report = service.audit_codex(codex)
     assert report["verified_files"] == 0 and len(report["issues"]) == 1
+
+
+def test_cloud_restores_append_delta_backups(tmp_path):
+    from aimemory.archive.raw_backup import read_raw
+    from aimemory.state import read_json
+    a, b = memory(tmp_path / "a"), memory(tmp_path / "b")
+    codex = tmp_path / "codex"
+    path = session(codex)
+    a.import_codex(codex)
+    with path.open("a") as handle:
+        handle.write(json.dumps({"type": "response_item", "timestamp": "2026-09-19T12:00:00Z",
+                                "payload": {"type": "message", "role": "assistant", "content": "new answer"}}) + "\n")
+    a.import_codex(codex)
+    entry = read_json(a.paths.state / "source-manifest.json")[str(path)]
+    assert entry["raw_path"].endswith(".delta.json.gz")
+    for service in (a, b):
+        write_json(service.paths.state / "cloud.json", {"provider": "local-folder", "root": str(tmp_path / "remote")})
+    a.sync_now()
+    b.sync_now()
+    assert read_raw(b.paths.archive, entry["raw_path"]) == path.read_bytes()
+    assert b.search("new answer")

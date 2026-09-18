@@ -160,7 +160,7 @@ HTML = """<!doctype html>
 <body>
   <header>
     <h1>AI Memory</h1>
-    <div class="muted">Codex conversations · v0.2.1</div>
+    <div class="muted">Codex conversations · v0.2.2</div>
   </header>
   <main>
     <section class="toolbar">

@@ -6,6 +6,7 @@ from pathlib import Path
 from filelock import FileLock
 
 from aimemory.cloud.google_drive import GoogleDriveProvider
+from aimemory.archive.raw_backup import RAW_PATTERN, read_raw
 from aimemory.state import atomic_write, now, read_json, write_json
 
 
@@ -58,7 +59,7 @@ class CloudSync:
                     if not path.is_file():
                         continue
                     relative = path.relative_to(exchange)
-                    if path.is_symlink() or not re.fullmatch(r"(?:snapshots/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json\.(?:gz|zst)|raw/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.jsonl\.gz)", relative.as_posix()):
+                    if path.is_symlink() or not re.fullmatch(r"(?:snapshots/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json\.(?:gz|zst)|" + RAW_PATTERN + ")", relative.as_posix()):
                         raise ValueError("Unexpected object in cloud archive")
                     if relative.as_posix() in known:
                         continue
@@ -76,8 +77,9 @@ class CloudSync:
                             with self.service.lock.acquire(timeout=60):
                                 indexed += int(self.service.accept_conversation(conversation))
                     else:
-                        import gzip
-                        if hashlib.sha256(gzip.decompress(payload)).hexdigest() != path.name.split(".")[0]:
+                        try:
+                            read_raw(exchange, relative.as_posix())
+                        except ValueError:
                             path.unlink()
                             raise ValueError("Raw cloud backup checksum mismatch. Retry synchronization.")
                     target = self.paths.archive / relative

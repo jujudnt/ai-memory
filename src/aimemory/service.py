@@ -10,6 +10,7 @@ from filelock import FileLock
 
 from aimemory.adapters import CodexAdapter
 from aimemory.archive import JsonArchive
+from aimemory.archive.raw_backup import write_raw
 from aimemory.config import AppPaths
 from aimemory.db import MemoryDatabase
 from aimemory.db.sqlite import file_hash
@@ -64,9 +65,7 @@ class MemoryService:
                 raw = session.path.read_bytes()
                 stat_hash = hashlib.sha256(raw).hexdigest()
                 conversation = adapter.parse_session(session.path, raw)
-                raw_path = Path("raw") / conversation.id / f"{stat_hash}.jsonl.gz"
-                if not (self.paths.archive / raw_path).exists():
-                    atomic_write(self.paths.archive / raw_path, gzip.compress(raw, compresslevel=6, mtime=0))
+                raw_path = write_raw(self.paths.archive, conversation.id, raw, stat_hash, entry)
                 conversation.metadata.update(source_sha256=stat_hash, raw_path=raw_path.as_posix())
                 # Preserve every source variant; the active index selects the latest revision.
                 self.accept_conversation(conversation)

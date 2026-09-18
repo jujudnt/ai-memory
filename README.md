@@ -86,7 +86,7 @@ Still pending: semantic/vector search, native tray UI, filesystem event collecti
 ### Storage layout
 
 - `~/.ai-memory/archive/sources`: current normalized conversations.
-- `~/.ai-memory/archive/raw`: compressed, byte-verifiable original Codex JSONL snapshots.
+- `~/.ai-memory/archive/raw`: compressed, byte-verifiable original Codex JSONL snapshots. Growing sessions store an initial full snapshot followed by compressed append deltas; source rewrites create a new full snapshot. `read_raw` reconstructs and checks the exact original bytes.
 - `~/.ai-memory/archive/snapshots`: immutable normalized revisions, including divergent versions.
 - `~/.ai-memory/db/memory.sqlite`: local full-text search index.
 - `~/.ai-memory/cache/exchange`: transfer cache; included in total local storage.
