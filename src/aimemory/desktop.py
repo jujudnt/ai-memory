@@ -8,6 +8,7 @@ import webbrowser
 import secrets
 from dataclasses import asdict
 from pathlib import Path
+from filelock import FileLock
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -374,7 +375,7 @@ class Handler(BaseHTTPRequestHandler):
             folder = self.body.get("folder", "")
             def connect():
                 if provider == "google-drive":
-                    with self.state.service.lock:
+                    with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
                         GoogleDriveProvider(self.state.service.paths).connect(self.body.get("oauth_client"))
                 elif provider == "local-folder":
                     if not folder.strip():
@@ -384,7 +385,7 @@ class Handler(BaseHTTPRequestHandler):
                     if root == home or home in root.parents or root in home.parents:
                         raise ValueError("Choose a folder outside AI Memory's data folder")
                     root.mkdir(parents=True, exist_ok=True)
-                    with self.state.service.lock:
+                    with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
                         write_json(self.state.service.paths.state / "cloud.json", {"provider": provider, "root": str(root)})
                 else:
                     raise ValueError("Unknown provider")
@@ -392,7 +393,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(self.state.start_job("Cloud connection and synchronization", connect))
             return
         if self.path == "/api/disconnect-cloud":
-            with self.state.service.lock:
+            with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
                 GoogleDriveProvider(self.state.service.paths).disconnect()
                 write_json(self.state.service.paths.state / "sync-status.json", {"status": "disconnected"})
             self._send_json({"message": "Disconnected. Local and remote backups have been kept."})

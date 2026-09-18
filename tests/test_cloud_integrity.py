@@ -120,3 +120,19 @@ def test_legacy_inherited_session_id_cannot_replace_repaired_archive(tmp_path):
     a.sync_now()
     b.sync_now()
     assert b.get_conversation(current.id).metadata["parser_version"] == 2
+
+
+def test_cloud_transfer_does_not_block_local_import(tmp_path, monkeypatch):
+    from aimemory.cloud.google_drive import GoogleDriveProvider
+    from filelock import FileLock
+    service = memory(tmp_path / "memory")
+    write_json(service.paths.state / "cloud.json", {"provider": "google-drive"})
+    codex = tmp_path / "codex"
+    session(codex)
+    def exchange(self, local, progress):
+        with FileLock(str(service.paths.state / "operations.lock"), timeout=0):
+            pass
+        assert service.import_codex(codex).imported == 1
+    monkeypatch.setattr(GoogleDriveProvider, "exchange", exchange)
+    service.sync_now()
+    assert service.status()["conversation_count"] == 1

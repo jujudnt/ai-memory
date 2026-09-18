@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-import shutil
 from pathlib import Path
+from filelock import FileLock
 
 from aimemory.cloud.google_drive import GoogleDriveProvider
 from aimemory.state import atomic_write, now, read_json, write_json
@@ -16,10 +16,10 @@ class CloudSync:
         self.status_path = self.paths.state / "sync-status.json"
 
     def run(self) -> dict:
-        config = read_json(self.paths.state / "cloud.json")
-        if not config:
-            return {"status": "not-configured"}
-        with self.service.lock:
+        with FileLock(str(self.paths.state / "sync.lock"), timeout=1):
+            config = read_json(self.paths.state / "cloud.json")
+            if not config:
+                return {"status": "not-configured"}
             status = read_json(self.status_path)
             status.update(status="preparing", started_at=now(), error=None)
             def progress(phase, **details):
@@ -73,7 +73,8 @@ class CloudSync:
                         # Skip already present local snapshots; remote revisions are indexed.
                         legacy_codex = conversation.source == "codex" and conversation.metadata.get("parser_version", 0) < 2
                         if not legacy_codex and not (self.paths.archive / relative).exists():
-                            indexed += int(self.service.accept_conversation(conversation))
+                            with self.service.lock.acquire(timeout=60):
+                                indexed += int(self.service.accept_conversation(conversation))
                     else:
                         import gzip
                         if hashlib.sha256(gzip.decompress(payload)).hexdigest() != path.name.split(".")[0]:

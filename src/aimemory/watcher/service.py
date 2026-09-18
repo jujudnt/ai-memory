@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
 import time
 import os
+import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -85,12 +85,16 @@ class WatcherService:
             self.status.last_error_at = _now()
         self._write_status()
         # Cloud failures do not erase the collector's independent health signal.
-        if time.monotonic() - getattr(self, "_last_sync", -60) >= 60:
+        thread = getattr(self, "_sync_thread", None)
+        if (thread is None or not thread.is_alive()) and time.monotonic() - getattr(self, "_last_sync", -60) >= 60:
             self._last_sync = time.monotonic()
-            try:
-                self.service.sync_now()
-            except Exception:
-                pass  # CloudSync persists the failure for the UI and retries next minute.
+            def synchronize():
+                try:
+                    self.service.sync_now()
+                except Exception:
+                    pass  # CloudSync persists failures and the next minute retries.
+            self._sync_thread = threading.Thread(target=synchronize, daemon=True)
+            self._sync_thread.start()
 
     def _write_status(self) -> None:
         self.status_path.parent.mkdir(parents=True, exist_ok=True)
