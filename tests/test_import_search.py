@@ -1,5 +1,9 @@
 import json
 
+import pytest
+
+from aimemory.adapters.claude import ClaudeAdapter
+from aimemory.adapters.vscode import VSCodeAdapter
 from aimemory.config import AppPaths
 from aimemory.service import MemoryService
 
@@ -103,3 +107,72 @@ def test_recent_conversations_show_latest_user_request(tmp_path):
 
     assert recent["title"] == "Old opening prompt"
     assert recent["latest_user_message"] == "Show this latest request"
+
+
+def test_claude_adapter_imports_jsonl_project_session(tmp_path):
+    claude_home = tmp_path / "claude"
+    session = claude_home / "projects" / "-tmp-project" / "claude-session.jsonl"
+    session.parent.mkdir(parents=True)
+    records = [
+        {
+            "type": "user",
+            "sessionId": "claude-session",
+            "timestamp": "2026-09-18T10:00:00Z",
+            "cwd": "/tmp/project",
+            "gitBranch": "main",
+            "message": {"role": "user", "content": "Peux-tu relire ce projet ?"},
+        },
+        {
+            "type": "assistant",
+            "sessionId": "claude-session",
+            "timestamp": "2026-09-18T10:01:00Z",
+            "message": {"role": "assistant", "content": "Oui."},
+        },
+    ]
+    session.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+
+    conversation = ClaudeAdapter(claude_home=claude_home).parse_session(session)
+
+    assert conversation.source == "claude"
+    assert conversation.source_session_id == "claude-session"
+    assert conversation.title == "Peux-tu relire ce projet ?"
+    assert [message.role for message in conversation.messages] == ["user", "assistant"]
+
+
+def test_vscode_adapter_imports_non_empty_chat_session(tmp_path):
+    code_user = tmp_path / "Code" / "User"
+    session = code_user / "workspaceStorage" / "abc" / "chatSessions" / "vscode-session.jsonl"
+    session.parent.mkdir(parents=True)
+    (session.parent.parent / "workspace.json").write_text(json.dumps({"folder": "file:///tmp/project"}))
+    payload = {
+        "kind": 0,
+        "v": {
+            "version": 3,
+            "creationDate": 1_789_000_000_000,
+            "sessionId": "vscode-session",
+            "requests": [
+                {
+                    "id": "r1",
+                    "message": {"text": "Explique cette erreur"},
+                    "response": [{"value": "Voici la cause."}],
+                }
+            ],
+        },
+    }
+    session.write_text(json.dumps(payload), encoding="utf-8")
+
+    conversation = VSCodeAdapter(code_user_dir=code_user).parse_session(session)
+
+    assert conversation.source == "vscode"
+    assert conversation.title == "Explique cette erreur"
+    assert [message.role for message in conversation.messages] == ["user", "assistant"]
+
+
+def test_vscode_adapter_skips_empty_chat_session(tmp_path):
+    code_user = tmp_path / "Code" / "User"
+    session = code_user / "workspaceStorage" / "abc" / "chatSessions" / "empty.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text(json.dumps({"kind": 0, "v": {"sessionId": "empty", "requests": []}}))
+
+    with pytest.raises(ValueError, match="empty"):
+        VSCodeAdapter(code_user_dir=code_user).parse_session(session)

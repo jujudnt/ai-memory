@@ -21,6 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("audit", help="Verify raw backups and normalized conversations against Codex.")
     sub.add_parser("sync", help="Synchronize the configured cloud provider.")
 
+    sub.add_parser("import-all", help="Import Codex, Claude, and VS Code conversations.")
+
     import_parser = sub.add_parser("import-codex", help="Import Codex JSONL sessions.")
     import_parser.add_argument("--codex-home", type=Path, default=None)
     import_parser.add_argument("--force", action="store_true")
@@ -46,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sync direction. Downloads are followed by a local index rebuild.",
     )
 
-    watch_parser = sub.add_parser("watch", help="Continuously collect Codex sessions.")
+    watch_parser = sub.add_parser("watch", help="Continuously collect supported local AI conversations.")
     watch_parser.add_argument("--codex-home", type=Path, default=None)
     watch_parser.add_argument("--interval", type=float, default=10.0)
     watch_parser.add_argument("--once", action="store_true")
@@ -87,6 +89,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "import-codex":
         result = service.import_codex(codex_home=args.codex_home, force=args.force)
+        print(json.dumps(asdict(result), indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "import-all":
+        result = service.import_all()
         print(json.dumps(asdict(result), indent=2, sort_keys=True))
         return 0
 

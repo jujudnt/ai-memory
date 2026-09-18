@@ -6,9 +6,12 @@ from aimemory.cloud.providers import provider_label, resolve_folder_root, valida
 
 
 def test_known_provider_labels_are_human_readable():
-    assert provider_label("icloud-drive") == "iCloud Drive"
-    assert provider_label("onedrive") == "OneDrive"
-    assert provider_label("dropbox") == "Dropbox"
+    assert provider_label("icloud-drive") == "iCloud Drive du Mac"
+    assert provider_label("onedrive") == "OneDrive du Mac"
+    assert provider_label("dropbox") == "Dropbox du Mac"
+    assert provider_label("icloud-online") == "iCloud Drive"
+    assert provider_label("onedrive-online") == "OneDrive"
+    assert provider_label("dropbox-online") == "Dropbox"
     assert provider_label("google-drive") == "Google Drive"
 
 

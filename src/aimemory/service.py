@@ -8,9 +8,11 @@ from pathlib import Path
 
 from filelock import FileLock
 
-from aimemory.adapters import CodexAdapter
+from aimemory.adapters import ClaudeAdapter, CodexAdapter, VSCodeAdapter
+from aimemory.adapters.base import ConversationSourceAdapter
 from aimemory.archive import JsonArchive
 from aimemory.archive.raw_backup import write_raw
+from aimemory.cleanup import run_auto_cleanup
 from aimemory.cloud.providers import provider_label
 from aimemory.config import AppPaths
 from aimemory.db import MemoryDatabase
@@ -32,6 +34,7 @@ class MemoryService:
     def __init__(self, paths: AppPaths | None = None):
         self.paths = paths or AppPaths.from_env()
         self.paths.ensure()
+        run_auto_cleanup(self.paths)
         self.archive = JsonArchive(self.paths.archive)
         self.db = MemoryDatabase(self.paths.db / "memory.sqlite")
         self.search_service = SearchService(self.db)
@@ -39,10 +42,28 @@ class MemoryService:
 
     def import_codex(self, codex_home: Path | None = None, force: bool = False) -> ImportResult:
         with self.lock:
-            return self._import_codex(codex_home, force)
+            return self._import_adapter(CodexAdapter(codex_home=codex_home), force=force)
 
-    def _import_codex(self, codex_home: Path | None, force: bool) -> ImportResult:
-        adapter = CodexAdapter(codex_home=codex_home)
+    def import_claude(self, claude_home: Path | None = None, force: bool = False) -> ImportResult:
+        with self.lock:
+            return self._import_adapter(ClaudeAdapter(claude_home=claude_home), force=force)
+
+    def import_vscode(self, code_user_dir: Path | None = None, force: bool = False) -> ImportResult:
+        with self.lock:
+            return self._import_adapter(VSCodeAdapter(code_user_dir=code_user_dir), force=force)
+
+    def import_all(self, force: bool = False, codex_home: Path | None = None) -> ImportResult:
+        with self.lock:
+            result = ImportResult(scanned=0, imported=0, skipped=0, errors=[])
+            for adapter in (CodexAdapter(codex_home=codex_home), ClaudeAdapter(), VSCodeAdapter()):
+                partial = self._import_adapter(adapter, force=force)
+                result.scanned += partial.scanned
+                result.imported += partial.imported
+                result.skipped += partial.skipped
+                result.errors.extend(partial.errors)
+            return result
+
+    def _import_adapter(self, adapter: ConversationSourceAdapter, force: bool) -> ImportResult:
         sessions = adapter.scan_sessions()
         manifest_path = self.paths.state / "source-manifest.json"
         manifest = read_json(manifest_path)
@@ -55,7 +76,7 @@ class MemoryService:
                 not force
                 and entry.get("size") == session.size
                 and entry.get("mtime_ns") == session.path.stat().st_mtime_ns
-                and entry.get("parser_version") == 2
+                and entry.get("parser_version") == getattr(adapter, "parser_version", 2)
                 and (self.paths.archive / entry.get("raw_path", "missing")).is_file()
                 and self.db.get_conversation_row(entry.get("conversation_id", ""))
             ):
@@ -78,10 +99,15 @@ class MemoryService:
                 manifest[str(session.path)] = {
                     "conversation_id": conversation.id, "source_session_id": conversation.source_session_id,
                     "sha256": stat_hash, "raw_path": raw_path.as_posix(), "size": len(raw),
-                    "mtime_ns": stat.st_mtime_ns, "parser_version": 2,
+                    "mtime_ns": stat.st_mtime_ns, "parser_version": getattr(adapter, "parser_version", 2),
                     "messages": len(conversation.messages), "tool_calls": len(conversation.tool_calls),
                 }
                 imported += 1
+            except ValueError as exc:
+                if "session is empty" in str(exc):
+                    skipped += 1
+                    continue
+                errors.append({"path": str(session.path), "error": str(exc)})
             except Exception as exc:
                 errors.append({"path": str(session.path), "error": str(exc)})
             write_json(manifest_path, manifest)
@@ -166,6 +192,7 @@ class MemoryService:
         }
         status["sync"] = read_json(self.paths.state / "sync-status.json")
         status["audit"] = read_json(self.paths.state / "audit.json")
+        status["cleanup"] = read_json(self.paths.state / "cleanup-status.json")
         status["watcher"] = self.watcher_status()
         return status
 

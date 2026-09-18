@@ -69,7 +69,7 @@ class WatcherService:
         self.status.last_scan_at = _now()
         self.status.total_scans += 1
         try:
-            result = self.service.import_codex(codex_home=codex_home)
+            result = self.service.import_all(codex_home=codex_home)
             self.status.scanned = result.scanned
             self.status.imported = result.imported
             self.status.skipped = result.skipped

@@ -9,6 +9,7 @@ __pycache__/
 
 dist/
 build/
+release/
 *.egg-info/
 
 .ai-memory/

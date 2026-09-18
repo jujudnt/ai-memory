@@ -9,7 +9,8 @@ from pathlib import Path
 from filelock import FileLock
 
 from aimemory.cloud.google_drive import GoogleDriveProvider
-from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, validate_sync_root
+from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, validate_sync_root
+from aimemory.cloud.rclone_provider import RcloneCloudProvider
 from aimemory.archive.raw_backup import RAW_PATTERN, read_raw
 from aimemory.state import atomic_write, now, read_json, write_json
 
@@ -46,6 +47,8 @@ class CloudSync:
                                 atomic_write(target, path.read_bytes())
                 if config["provider"] == "google-drive":
                     GoogleDriveProvider(self.paths).exchange(exchange, progress)
+                elif config["provider"] in RCLONE_DIRECT_PROVIDERS:
+                    RcloneCloudProvider.for_provider(self.paths, config["provider"]).exchange(exchange, progress)
                 elif config["provider"] in LOCAL_FOLDER_PROVIDERS:
                     remote = Path(config["root"]).expanduser().resolve()
                     validate_sync_root(remote, self.paths.home)

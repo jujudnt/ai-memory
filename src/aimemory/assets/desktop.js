@@ -36,16 +36,25 @@ const elapsed = (value) => {
 };
 const providerNames = {
   "google-drive": "Google Drive",
-  "icloud-drive": "iCloud Drive",
-  onedrive: "OneDrive",
-  dropbox: "Dropbox",
+  "dropbox-online": "Dropbox",
+  "onedrive-online": "OneDrive",
+  "icloud-online": "iCloud Drive",
+  "icloud-drive": "iCloud Drive du Mac",
+  onedrive: "OneDrive du Mac",
+  dropbox: "Dropbox du Mac",
   "local-folder": "Dossier synchronis\u00e9",
 };
 const providerNotes = {
   "google-drive":
     "Connexion directe Google Drive via rclone. Si Drive est plein, la sauvegarde s'arr\u00eate et vous pouvez lib\u00e9rer de l'espace ou changer de destination.",
+  "dropbox-online":
+    "Connexion directe Dropbox via rclone. Le compte choisi peut \u00eatre diff\u00e9rent du Dropbox install\u00e9 sur ce Mac.",
+  "onedrive-online":
+    "Connexion directe OneDrive via rclone. Choisissez personnel ou professionnel selon le compte \u00e0 connecter.",
+  "icloud-online":
+    "Connexion directe iCloud via rclone, ind\u00e9pendante de l'iCloud local du Mac. Les identifiants restent dans la configuration rclone priv\u00e9e de AI Memory.",
   "icloud-drive":
-    "Sauvegarde dans iCloud Drive via le dossier local du Mac. iCloud g\u00e8re ensuite l'envoi vers le cloud.",
+    "Sauvegarde dans l'iCloud Drive d\u00e9j\u00e0 connect\u00e9 \u00e0 cette session macOS.",
   onedrive:
     "Sauvegarde dans le dossier OneDrive local. OneDrive doit \u00eatre install\u00e9 et connect\u00e9 sur ce Mac.",
   dropbox:
@@ -113,6 +122,9 @@ function render(data) {
   $("#settings-archive-size").textContent = size(storage.archive_bytes);
   $("#db-size").textContent = size(storage.database_bytes);
   $("#total-size").textContent = size(storage.total_bytes);
+  $("#cleanup-size").textContent = data.cleanup?.last_run_at
+    ? `${size(data.cleanup.freed_bytes)} lib\u00e9r\u00e9s ${elapsed(data.cleanup.last_run_at)}`
+    : "En attente";
   $("#archive-path").textContent = storage.archive;
   $("#footer-size").textContent =
     `${size(storage.total_bytes)} sur cet ordinateur`;
@@ -208,8 +220,7 @@ function render(data) {
       row.latest_user_message || row.title || row.source_session_id || row.id;
     item.querySelector(".conversation-title").textContent = title;
     item.querySelector(".conversation-title").title = title;
-    item.querySelector(".conversation-source").textContent =
-      row.source === "codex" ? "Codex" : row.source;
+    item.querySelector(".conversation-source").textContent = sourceName(row.source);
     item.querySelector("time").textContent = date(
       row.updated_at || row.created_at,
     );
@@ -251,6 +262,9 @@ async function action(name, body = {}) {
         provider: $("#provider").value,
         folder: $("#folder").value,
         oauth_client: file ? JSON.parse(await file.text()) : null,
+        icloud_apple_id: $("#icloud-apple-id").value,
+        icloud_password: $("#icloud-password").value,
+        onedrive_type: $("#onedrive-type").value,
       };
     }
     const res = await fetch(`/api/${name}`, {
@@ -291,9 +305,13 @@ $("#cloud-switch").addEventListener("click", () => {
 });
 $("#provider").addEventListener("change", (event) => {
   const google = event.target.value === "google-drive";
+  const icloudOnline = event.target.value === "icloud-online";
+  const onedriveOnline = event.target.value === "onedrive-online";
   const customFolder = event.target.value === "local-folder";
   $("#folder-label").hidden = !customFolder;
   $("#oauth-settings").hidden = !google;
+  $("#icloud-fields").hidden = !icloudOnline;
+  $("#onedrive-fields").hidden = !onedriveOnline;
   const label = providerNames[event.target.value] || "la destination";
   $('[data-action="connect-cloud"]').textContent = `Connecter ${label}`;
   $("#provider-note").textContent =
@@ -306,3 +324,13 @@ async function poll() {
   setTimeout(poll, 5000);
 }
 poll();
+
+function sourceName(source) {
+  return (
+    {
+      codex: "Codex",
+      claude: "Claude",
+      vscode: "VS Code",
+    }[source] || source
+  );
+}

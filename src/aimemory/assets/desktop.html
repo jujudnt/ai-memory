@@ -122,7 +122,7 @@
       </section>
       <footer>
         <span><span class="tiny-dot"></span> Stockage local</span
-        ><span id="footer-size"></span><span>v0.3.3</span>
+        ><span id="footer-size"></span><span>v0.4.0</span>
       </footer>
     </main>
     <dialog id="settings" aria-labelledby="settings-title">
@@ -182,13 +182,37 @@
             <label for="provider">Destination</label
             ><select id="provider">
               <option value="google-drive">Google Drive</option>
-              <option value="icloud-drive">iCloud Drive</option>
-              <option value="onedrive">OneDrive</option>
-              <option value="dropbox">Dropbox</option>
+              <option value="dropbox-online">Dropbox</option>
+              <option value="onedrive-online">OneDrive</option>
+              <option value="icloud-online">iCloud Drive</option>
+              <option value="icloud-drive">iCloud Drive du Mac</option>
+              <option value="onedrive">OneDrive du Mac</option>
+              <option value="dropbox">Dropbox du Mac</option>
               <option value="local-folder">
                 Autre dossier synchronis&eacute;
               </option>
             </select>
+            <div id="onedrive-fields" hidden>
+              <label for="onedrive-type">Type OneDrive</label
+              ><select id="onedrive-type">
+                <option value="personal">Personnel</option>
+                <option value="business">Professionnel ou scolaire</option>
+              </select>
+            </div>
+            <div id="icloud-fields" hidden>
+              <label
+                >Apple ID<input
+                  id="icloud-apple-id"
+                  autocomplete="username"
+                  placeholder="nom@icloud.com"
+              /></label>
+              <label
+                >Mot de passe<input
+                  id="icloud-password"
+                  type="password"
+                  autocomplete="current-password"
+              /></label>
+            </div>
             <label id="folder-label" hidden
               >Chemin du dossier<input
                 id="folder"
@@ -246,6 +270,10 @@
             <div>
               <dt>Total sur cet ordinateur</dt>
               <dd id="total-size"></dd>
+            </div>
+            <div>
+              <dt>Nettoyage automatique</dt>
+              <dd id="cleanup-size"></dd>
             </div>
           </dl>
           <code id="archive-path"></code>

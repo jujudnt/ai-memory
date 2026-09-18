@@ -4,12 +4,16 @@ from pathlib import Path
 
 
 LOCAL_FOLDER_PROVIDERS = {"local-folder", "icloud-drive", "onedrive", "dropbox"}
+RCLONE_DIRECT_PROVIDERS = {"dropbox-online", "onedrive-online", "icloud-online"}
 
 PROVIDER_LABELS = {
     "google-drive": "Google Drive",
-    "icloud-drive": "iCloud Drive",
-    "onedrive": "OneDrive",
-    "dropbox": "Dropbox",
+    "icloud-online": "iCloud Drive",
+    "dropbox-online": "Dropbox",
+    "onedrive-online": "OneDrive",
+    "icloud-drive": "iCloud Drive du Mac",
+    "onedrive": "OneDrive du Mac",
+    "dropbox": "Dropbox du Mac",
     "local-folder": "Dossier synchronisé",
 }
 

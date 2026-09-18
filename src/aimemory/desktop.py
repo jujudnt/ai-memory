@@ -23,7 +23,8 @@ from aimemory.installer import (
 )
 from aimemory.service import MemoryService
 from aimemory.cloud.google_drive import GoogleDriveProvider
-from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, resolve_folder_root, validate_sync_root
+from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, resolve_folder_root, validate_sync_root
+from aimemory.cloud.rclone_provider import RcloneCloudProvider
 from aimemory.sync.cloud_sync import cancel_active_sync
 from aimemory.state import read_json, write_json
 from aimemory.health import watcher_health
@@ -126,6 +127,14 @@ class Handler(BaseHTTPRequestHandler):
                 if provider == "google-drive":
                     with _cloud_config_lock(self.state.service):
                         GoogleDriveProvider(self.state.service.paths).connect(self.body.get("oauth_client"))
+                elif provider in RCLONE_DIRECT_PROVIDERS:
+                    options = {
+                        "apple_id": self.body.get("icloud_apple_id"),
+                        "password": self.body.get("icloud_password"),
+                        "onedrive_type": self.body.get("onedrive_type"),
+                    }
+                    with _cloud_config_lock(self.state.service):
+                        RcloneCloudProvider.for_provider(self.state.service.paths, provider).connect(options)
                 elif provider in LOCAL_FOLDER_PROVIDERS:
                     root = resolve_folder_root(provider, folder)
                     validate_sync_root(root, self.state.service.paths.home)
@@ -142,6 +151,8 @@ class Handler(BaseHTTPRequestHandler):
                 config = read_json(self.state.service.paths.state / "cloud.json")
                 if config.get("provider") == "google-drive":
                     GoogleDriveProvider(self.state.service.paths).disconnect()
+                elif config.get("provider") in RCLONE_DIRECT_PROVIDERS:
+                    RcloneCloudProvider.for_provider(self.state.service.paths, config["provider"]).disconnect()
                 else:
                     (self.state.service.paths.state / "cloud.json").unlink(missing_ok=True)
                 write_json(self.state.service.paths.state / "sync-status.json", {"status": "disconnected"})
@@ -152,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/audit":
             def audit():
-                imported = self.state.service.import_codex()
+                imported = self.state.service.import_all()
                 report = self.state.service.audit_codex()
                 if imported.errors or report["issues"] or report["missing_thread_ids"]:
                     raise ValueError("Verification found issues. See verification status and audit.json.")
@@ -172,7 +183,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/import":
             def import_now():
-                result = self.state.service.import_codex()
+                result = self.state.service.import_all()
                 if result.errors:
                     raise ValueError(f"{len(result.errors)} import failures: {result.errors[0]['error']}")
                 return asdict(result)
