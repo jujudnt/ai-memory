@@ -4,6 +4,7 @@ const icons = () => lucide.createIcons();
 let current = null;
 let requestBusy = false;
 let lastJobMessage = "";
+let switchingCloud = false;
 const size = (value) => {
   const n = Math.max(0, Number(value || 0));
   const units = ["o", "Ko", "Mo", "Go", "To"];
@@ -175,7 +176,7 @@ function render(data) {
   else $("#cloud-progress").removeAttribute("value");
   $("#cloud-setup").hidden = configured;
   $('[data-action="sync"]').hidden = !configured;
-  $("#cloud-connect-form").hidden = configured;
+  $("#cloud-connect-form").hidden = configured && !switchingCloud;
   $("#cloud-manage").hidden = !configured;
   $("#cloud-summary").textContent = configured
     ? `${provider} \u00b7 ${storage.remote}`
@@ -262,6 +263,8 @@ async function action(name, body = {}) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.message);
+    if (name === "connect-cloud" || name === "disconnect-cloud")
+      switchingCloud = false;
     notice(data.message);
     await refresh();
   } catch (error) {
@@ -280,6 +283,11 @@ $("#menubar-login").addEventListener("change", async (event) => {
   event.target.disabled = true;
   await action("menubar-login", { enabled: event.target.checked });
   event.target.disabled = false;
+});
+$("#cloud-switch").addEventListener("click", () => {
+  switchingCloud = true;
+  render(current);
+  $("#provider").focus();
 });
 $("#provider").addEventListener("change", (event) => {
   const google = event.target.value === "google-drive";

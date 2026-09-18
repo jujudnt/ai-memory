@@ -8,6 +8,7 @@ import secrets
 import sys
 import time
 import tomllib
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from filelock import FileLock, Timeout
@@ -23,6 +24,7 @@ from aimemory.installer import (
 from aimemory.service import MemoryService
 from aimemory.cloud.google_drive import GoogleDriveProvider
 from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, resolve_folder_root, validate_sync_root
+from aimemory.sync.cloud_sync import cancel_active_sync
 from aimemory.state import read_json, write_json
 from aimemory.health import watcher_health
 
@@ -122,13 +124,13 @@ class Handler(BaseHTTPRequestHandler):
             folder = self.body.get("folder", "")
             def connect():
                 if provider == "google-drive":
-                    with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
+                    with _cloud_config_lock(self.state.service):
                         GoogleDriveProvider(self.state.service.paths).connect(self.body.get("oauth_client"))
                 elif provider in LOCAL_FOLDER_PROVIDERS:
                     root = resolve_folder_root(provider, folder)
                     validate_sync_root(root, self.state.service.paths.home)
                     root.mkdir(parents=True, exist_ok=True)
-                    with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
+                    with _cloud_config_lock(self.state.service):
                         write_json(self.state.service.paths.state / "cloud.json", {"provider": provider, "root": str(root)})
                 else:
                     raise ValueError("Unknown provider")
@@ -136,7 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(self.state.start_job("Connexion et synchronisation", connect))
             return
         if self.path == "/api/disconnect-cloud":
-            with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=1):
+            with _cloud_config_lock(self.state.service):
                 config = read_json(self.state.service.paths.state / "cloud.json")
                 if config.get("provider") == "google-drive":
                     GoogleDriveProvider(self.state.service.paths).disconnect()
@@ -231,6 +233,24 @@ def mcp_configured() -> bool:
         return bool(server.get("command")) and server.get("enabled", True)
     except (OSError, ValueError):
         return False
+
+
+@contextmanager
+def _cloud_config_lock(service: MemoryService):
+    lock = FileLock(str(service.paths.state / "sync.lock"), timeout=1)
+    try:
+        lock.acquire()
+    except Timeout:
+        cancel_active_sync(service.paths)
+        lock = FileLock(str(service.paths.state / "sync.lock"), timeout=20)
+        try:
+            lock.acquire()
+        except Timeout:
+            raise ValueError("La synchronisation est encore en cours. Réessayez dans quelques secondes.") from None
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def main(background: bool = False) -> int:

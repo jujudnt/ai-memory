@@ -12,8 +12,8 @@ The release artifact is intentionally simple:
 Create a release by pushing a tag:
 
 ```bash
-git tag v0.3.2
-git push origin v0.3.2
+git tag v0.3.3
+git push origin v0.3.3
 ```
 
 GitHub Actions builds:
@@ -34,6 +34,8 @@ V0.2 adds Google Drive OAuth, automatic bidirectional synchronization, full raw 
 V0.3 adds the simplified dashboard and native macOS menu-bar companion. macOS desktop dependencies include PyObjC Cocoa. Local HTML, CSS, JavaScript and MIT-licensed Lucide icons are bundled with `--collect-data aimemory`; there is no CDN request at runtime. `LSUIElement` keeps the companion out of the Dock. The watcher runs independently: quitting the menu interface does not stop collection. Login launch is managed by a separate `io.github.jujudnt.ai-memory.menubar` LaunchAgent and can be disabled in settings.
 
 V0.3.2 adds iCloud Drive, OneDrive, Dropbox and custom synchronized-folder destinations through local provider folders, plus clearer Google Drive quota-full errors.
+
+V0.3.3 lets the desktop UI change or disconnect the cloud destination while a transfer is running by cancelling the active transfer first, instead of surfacing a lock-file error.
 
 ## macOS Gatekeeper
 

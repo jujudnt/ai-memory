@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from filelock import FileLock
 
@@ -20,12 +22,14 @@ class CloudSync:
 
     def run(self) -> dict:
         with FileLock(str(self.paths.state / "sync.lock"), timeout=1):
+            clear_cancel(self.paths)
             config = read_json(self.paths.state / "cloud.json")
             if not config:
                 return {"status": "not-configured"}
             status = read_json(self.status_path)
             status.update(status="preparing", started_at=now(), error=None)
             def progress(phase, **details):
+                check_cancelled(self.paths)
                 status.update(status=phase, heartbeat_at=now(), **details)
                 write_json(self.status_path, status)
             try:
@@ -35,6 +39,7 @@ class CloudSync:
                 exchange.mkdir(parents=True, exist_ok=True)
                 for category in ("snapshots", "raw"):
                     for path in (self.paths.archive / category).rglob("*"):
+                        check_cancelled(self.paths)
                         if path.is_file() and not path.name.startswith("."):
                             target = exchange / path.relative_to(self.paths.archive)
                             if not target.exists():
@@ -48,6 +53,7 @@ class CloudSync:
                         progress(phase)
                         _ensure_available_space(source, destination)
                         for path in source.rglob("*"):
+                            check_cancelled(self.paths)
                             if path.is_file() and not path.is_symlink() and not path.name.startswith("."):
                                 target = destination / path.relative_to(source)
                                 if not target.exists():
@@ -58,6 +64,7 @@ class CloudSync:
                 known = read_json(self.paths.state / "synced-objects.json")
                 indexed = 0
                 for path in sorted(exchange.rglob("*")):
+                    check_cancelled(self.paths)
                     if not path.is_file():
                         continue
                     relative = path.relative_to(exchange)
@@ -99,6 +106,38 @@ class CloudSync:
             finally:
                 write_json(self.status_path, status)
             return status
+
+
+def cancel_active_sync(paths) -> None:
+    write_json(paths.state / "sync-cancel.json", {"cancelled_at": now()})
+    _terminate_rclone(paths)
+
+
+def check_cancelled(paths) -> None:
+    if (paths.state / "sync-cancel.json").exists():
+        raise RuntimeError("Synchronisation annulée pour changer de destination.")
+
+
+def clear_cancel(paths) -> None:
+    (paths.state / "sync-cancel.json").unlink(missing_ok=True)
+
+
+def _terminate_rclone(paths) -> None:
+    config = str(paths.home / "credentials" / "rclone.conf")
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "rclone.exe"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+    subprocess.run(
+        ["pkill", "-f", f"rclone.*{config}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
 
 
 def _ensure_available_space(source: Path, destination: Path) -> None:
