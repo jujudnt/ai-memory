@@ -160,7 +160,7 @@ HTML = """<!doctype html>
 <body>
   <header>
     <h1>AI Memory</h1>
-    <div class="muted">Codex conversations · v0.2.0</div>
+    <div class="muted">Codex conversations · v0.2.1</div>
   </header>
   <main>
     <section class="toolbar">
@@ -267,7 +267,7 @@ HTML = """<!doctype html>
       document.querySelector('#cloud-detail').textContent = `${storage.cloud_sync === 'configured' ? storage.provider + ' / ' + storage.remote : 'Not connected'} · ${sync.status || 'idle'}${sync.error ? ': ' + sync.error : ''}`;
       document.querySelector('#cloud-last').textContent = `Last successful sync: ${date(sync.last_success_at)} · Objects verified: ${sync.object_count || 0} · Transferred: ${size(sync.bytes)} / ${size(sync.totalBytes)} · ${size(sync.speed)}/s · Last activity: ${date(sync.heartbeat_at)}`;
       const audit = data.audit || {};
-      document.querySelector('#audit-detail').textContent = audit.checked_at ? `${audit.verified_files}/${audit.files} source files verified · ${audit.unique_sessions} distinct conversations · ${(audit.issues || []).length} errors · ${(audit.changing_files || []).length} changed since import · ${(audit.missing_thread_ids || []).length} Codex threads without source files · ${date(audit.checked_at)}` : 'Not verified yet';
+      document.querySelector('#audit-detail').textContent = audit.checked_at ? `${audit.verified_files}/${audit.files} source backups verified · ${audit.unique_sessions} distinct conversations · ${(audit.issues || []).length} errors · ${(audit.changing_files || []).length} changed since import · ${(audit.missing_thread_ids || []).length} Codex threads without source files · ${date(audit.checked_at)}` : 'Not verified yet';
       document.querySelector('#watcher-detail').textContent = watcher
         ? `Installed: ${service && service.installed ? 'yes' : 'no'} | Last success: ${text(watcher.last_success_at)} | Last scan: ${text(watcher.last_scan_at)} | Scanned/imported/skipped: ${watcher.scanned || 0}/${watcher.imported || 0}/${watcher.skipped || 0}${watcher.last_error ? ' | Error: ' + watcher.last_error : ''}`
         : `Installed: ${service && service.installed ? 'yes' : 'no'} | No watcher import status yet.`;

@@ -62,7 +62,7 @@ def install_mcp_config(
         rf"(?ms)^\[mcp_servers\.{re.escape(server_name)}\]\n.*?(?=^\[|\Z)"
     )
     if pattern.search(existing):
-        updated = pattern.sub(block.rstrip() + "\n\n", existing)
+        updated = pattern.sub(lambda match: block.rstrip() + "\n\n", existing)
     else:
         prefix = existing.rstrip() + "\n\n" if existing.strip() else ""
         updated = prefix + block

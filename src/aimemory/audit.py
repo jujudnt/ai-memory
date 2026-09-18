@@ -26,11 +26,15 @@ def audit_codex(service, codex_home: Path | None = None) -> dict:
             parsed = adapter.parse_session(session.path, raw)
             ids.add(parsed.source_session_id)
             digest = hashlib.sha256(raw).hexdigest()
+            restored = gzip.decompress((service.paths.archive / entry["raw_path"]).read_bytes())
+            if hashlib.sha256(restored).hexdigest() != entry.get("sha256"):
+                raise ValueError("Raw backup checksum differs from the imported snapshot")
             if entry.get("sha256") != digest:
                 result["changing_files"].append(str(session.path))
-                continue
-            restored = gzip.decompress((service.paths.archive / entry["raw_path"]).read_bytes())
-            if restored != raw:
+                # Validate the captured snapshot even when a live source has advanced.
+                parsed = adapter.parse_session(session.path, restored)
+                digest = entry["sha256"]
+            elif restored != raw:
                 raise ValueError("Raw backup differs from source")
             if not service.db.get_conversation_row(parsed.id):
                 raise ValueError("Conversation missing from index")

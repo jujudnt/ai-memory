@@ -106,3 +106,13 @@ def test_status_exposes_local_storage(tmp_path: Path, monkeypatch):
 
     assert status["storage"]["provider"] == "local-folder"
     assert status["storage"]["cloud_sync"] == "not-configured"
+
+
+def test_reinstall_mcp_preserves_windows_path_escaping(tmp_path):
+    import tomllib
+    config = tmp_path / "config.toml"
+    command = r"C:\Users\Julia\AI Memory.exe"
+    with patch("aimemory.installer.resolve_mcp_command", return_value=(command, ["mcp-server"])):
+        install_mcp_config(config_path=config)
+        install_mcp_config(config_path=config)
+    assert tomllib.loads(config.read_text())["mcp_servers"]["ai-memory"]["command"] == command

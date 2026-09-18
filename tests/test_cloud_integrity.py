@@ -136,3 +136,19 @@ def test_cloud_transfer_does_not_block_local_import(tmp_path, monkeypatch):
     monkeypatch.setattr(GoogleDriveProvider, "exchange", exchange)
     service.sync_now()
     assert service.status()["conversation_count"] == 1
+
+
+def test_audit_checks_captured_backup_even_when_session_has_advanced(tmp_path):
+    service = memory(tmp_path / "memory")
+    codex = tmp_path / "codex"
+    path = session(codex)
+    service.import_codex(codex)
+    with path.open("a") as handle:
+        handle.write(json.dumps({"type": "event_msg", "payload": {"type": "task_started"}}) + "\n")
+    report = service.audit_codex(codex)
+    assert report["verified_files"] == 1
+    assert report["changing_files"] == [str(path)]
+    assert not report["ok"]
+    next((service.paths.archive / "raw").rglob("*.gz")).write_bytes(gzip.compress(b"bad"))
+    report = service.audit_codex(codex)
+    assert report["verified_files"] == 0 and len(report["issues"]) == 1
