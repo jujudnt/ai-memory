@@ -16,7 +16,7 @@ RAW_PATTERN = r"raw/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.(?:jsonl|delta\.json)\.gz"
 def write_raw(root: Path, conversation_id: str, raw: bytes, digest: str, previous: dict) -> Path:
     path = Path("raw") / conversation_id / f"{digest}.jsonl.gz"
     length = previous.get("size", 0)
-    parent = previous.get("raw_path", "")
+    parent = Path(previous.get("raw_path", "")).as_posix()
     if (length and length < len(raw) and re.fullmatch(RAW_PATTERN, parent)
             and (root / parent).is_file()
             and hashlib.sha256(raw[:length]).hexdigest() == previous.get("sha256")):
@@ -31,6 +31,7 @@ def write_raw(root: Path, conversation_id: str, raw: bytes, digest: str, previou
 
 
 def read_raw(root: Path, relative: str) -> bytes:
+    relative = Path(relative).as_posix()
     parts = []
     seen = set()
     expected_length = None
