@@ -48,3 +48,58 @@ def test_import_codex_and_search(tmp_path):
     assert len(rows) == 1
     assert rows[0]["source_session_id"] == "abc"
     assert service.status()["archive_count"] == 1
+
+
+def test_recent_conversations_show_latest_user_request(tmp_path):
+    codex_home = tmp_path / "codex"
+    session = codex_home / "sessions" / "2026" / "09" / "18" / "session.jsonl"
+    session.parent.mkdir(parents=True)
+    records = [
+        {
+            "timestamp": "2026-09-18T00:00:00Z",
+            "ordinal": 0,
+            "type": "session_meta",
+            "payload": {"session_id": "abc", "cwd": "/repo/ai-memory"},
+        },
+        {
+            "timestamp": "2026-09-18T00:01:00Z",
+            "ordinal": 1,
+            "type": "response_item",
+            "payload": {"type": "message", "id": "m1", "role": "user", "content": "Old opening prompt"},
+        },
+        {
+            "timestamp": "2026-09-18T00:02:00Z",
+            "ordinal": 2,
+            "type": "response_item",
+            "payload": {"type": "message", "id": "m2", "role": "assistant", "content": "ok"},
+        },
+        {
+            "timestamp": "2026-09-18T00:03:00Z",
+            "ordinal": 3,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "id": "m3",
+                "role": "user",
+                "content": "# Files mentioned by the user:\n\n## screenshot.png\n\n## My request:\nShow this latest request",
+            },
+        },
+    ]
+    session.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+
+    paths = AppPaths(
+        home=tmp_path / "home",
+        archive=tmp_path / "home" / "archive",
+        db=tmp_path / "home" / "db",
+        vectors=tmp_path / "home" / "vectors",
+        cache=tmp_path / "home" / "cache",
+        logs=tmp_path / "home" / "logs",
+        state=tmp_path / "home" / "state",
+    )
+    service = MemoryService(paths)
+
+    service.import_codex(codex_home=codex_home)
+    recent = service.list_conversations(limit=1)[0]
+
+    assert recent["title"] == "Old opening prompt"
+    assert recent["latest_user_message"] == "Show this latest request"

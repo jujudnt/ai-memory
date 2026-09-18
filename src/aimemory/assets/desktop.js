@@ -184,7 +184,7 @@ function render(data) {
     item.className = "conversation";
     item.innerHTML =
       '<i data-lucide="message-square"></i><div class="conversation-copy"><div class="conversation-title"></div><div class="conversation-source"></div></div><time></time>';
-    const title = row.title || row.source_session_id || row.id;
+    const title = row.latest_user_message || row.title || row.source_session_id || row.id;
     item.querySelector(".conversation-title").textContent = title;
     item.querySelector(".conversation-title").title = title;
     item.querySelector(".conversation-source").textContent =

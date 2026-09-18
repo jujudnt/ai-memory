@@ -64,6 +64,9 @@ class MemoryDatabase:
                     FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
 
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation_role_ordinal
+                ON messages(conversation_id, role, ordinal DESC);
+
                 CREATE TABLE IF NOT EXISTS tool_calls (
                     id TEXT PRIMARY KEY,
                     conversation_id TEXT NOT NULL,
@@ -279,10 +282,34 @@ class MemoryDatabase:
         if project_id:
             sql += " AND project_id = ?"
             params.append(project_id)
-        sql += " ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?"
+        sql = f"""
+            SELECT c.*,
+                (
+                    SELECT m.content
+                    FROM messages m
+                    WHERE m.conversation_id = c.id AND m.role = 'user'
+                    ORDER BY m.ordinal DESC
+                    LIMIT 1
+                ) AS latest_user_message,
+                (
+                    SELECT m.timestamp
+                    FROM messages m
+                    WHERE m.conversation_id = c.id AND m.role = 'user'
+                    ORDER BY m.ordinal DESC
+                    LIMIT 1
+                ) AS latest_user_message_at
+            FROM ({sql}) c
+            ORDER BY COALESCE(c.updated_at, c.created_at) DESC
+            LIMIT ?
+        """
         params.append(limit)
         with self.connect() as conn:
-            return [dict(row) for row in conn.execute(sql, params).fetchall()]
+            rows = []
+            for row in conn.execute(sql, params).fetchall():
+                item = dict(row)
+                item["latest_user_message"] = _conversation_preview(item.get("latest_user_message"))
+                rows.append(item)
+            return rows
 
     def get_conversation_row(self, conversation_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -323,3 +350,16 @@ def _fts_query(query: str) -> str:
     if not terms:
         return '""'
     return " OR ".join(f'"{term}"' for term in terms)
+
+
+def _conversation_preview(content: str | None, limit: int = 240) -> str | None:
+    if not content:
+        return None
+    text = content.replace("\r\n", "\n").replace("\r", "\n").strip()
+    marker = "## My request:"
+    if marker in text:
+        text = text.split(marker, 1)[1].strip()
+    text = " ".join(text.split())
+    if not text:
+        return None
+    return text[: limit - 1].rstrip() + "…" if len(text) > limit else text

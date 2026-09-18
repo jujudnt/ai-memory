@@ -12,8 +12,8 @@ The release artifact is intentionally simple:
 Create a release by pushing a tag:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
 GitHub Actions builds:
