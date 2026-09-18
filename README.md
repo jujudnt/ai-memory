@@ -13,6 +13,7 @@ This repository intentionally starts with the data-safe core:
 - Local-folder sync primitives for the first provider abstraction
 - A real stdio MCP server entry point through `aimemory-mcp`
 - A polling watcher with a status file that a desktop UI can display
+- A first local-browser desktop UI for importing, enabling MCP, installing the watcher, and checking status
 
 No hosted backend, paid embedding API, or proprietary vector service is required.
 
@@ -28,6 +29,7 @@ aimemory doctor
 aimemory import-codex
 aimemory search "Cloud Run memory"
 aimemory mcp-config
+aimemory desktop
 ```
 
 Without installing the console script, use:
@@ -54,7 +56,8 @@ This is not yet the full desktop app described in the product specification. It 
 6. Expose reusable service methods for CLI, GUI, and MCP.
 7. Run a local stdio MCP server for Codex.
 8. Track watcher health for the future desktop app.
+9. Package a first desktop executable through GitHub Releases.
 
-The vector index, cloud OAuth providers, native background service installers, tray app, and encryption are next layers on top of this core.
+The vector index, cloud OAuth providers, tray app, and encryption are next layers on top of this core.
 
 See [docs/mcp.md](docs/mcp.md) for MCP setup.

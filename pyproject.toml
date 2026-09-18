@@ -17,10 +17,12 @@ zstd = ["zstandard>=0.23"]
 watch = ["watchdog>=4"]
 mcp = ["mcp>=1.12.4"]
 dev = ["pytest>=8", "zstandard>=0.23", "mcp>=1.12.4"]
+desktop = ["pyinstaller>=6.0", "mcp[cli]>=1.12.4"]
 
 [project.scripts]
 aimemory = "aimemory.cli:main"
 aimemory-mcp = "aimemory.mcp.server:main"
+aimemory-desktop = "aimemory.desktop:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aimemory"]

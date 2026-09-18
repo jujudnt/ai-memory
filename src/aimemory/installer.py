@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+import os
+import platform
+import plistlib
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+
+MCP_SERVER_NAME = "ai-memory"
+WATCHER_LABEL = "io.github.jujudnt.ai-memory.watcher"
+
+
+@dataclass(slots=True)
+class InstallResult:
+    changed: bool
+    message: str
+    path: str | None = None
+
+
+def resolve_aimemory_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    executable = shutil.which("aimemory")
+    if executable:
+        return [executable]
+    return [sys.executable, "-m", "aimemory.cli"]
+
+
+def resolve_mcp_command() -> tuple[str, list[str]]:
+    if getattr(sys, "frozen", False):
+        return sys.executable, ["mcp-server"]
+    executable = shutil.which("aimemory-mcp")
+    if executable:
+        return executable, []
+    return sys.executable, ["-m", "aimemory.mcp.server"]
+
+
+def install_mcp_config(
+    server_name: str = MCP_SERVER_NAME,
+    config_path: Path | None = None,
+    ai_memory_home: Path | None = None,
+) -> InstallResult:
+    config_path = config_path or Path("~/.codex/config.toml").expanduser()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    block = mcp_toml_block(server_name, ai_memory_home)
+    pattern = re.compile(
+        rf"(?ms)^\[mcp_servers\.{re.escape(server_name)}\]\n.*?(?=^\[|\Z)"
+    )
+    if pattern.search(existing):
+        updated = pattern.sub(block.rstrip() + "\n\n", existing)
+    else:
+        prefix = existing.rstrip() + "\n\n" if existing.strip() else ""
+        updated = prefix + block
+    if updated == existing:
+        return InstallResult(False, "MCP config already up to date.", str(config_path))
+    config_path.write_text(updated, encoding="utf-8")
+    return InstallResult(True, "MCP config installed.", str(config_path))
+
+
+def mcp_toml_block(
+    server_name: str = MCP_SERVER_NAME,
+    ai_memory_home: Path | None = None,
+) -> str:
+    command, args = resolve_mcp_command()
+    lines = [
+        f"[mcp_servers.{server_name}]",
+        f'command = "{_toml_string(command)}"',
+    ]
+    if args:
+        lines.append("args = [" + ", ".join(f'"{_toml_string(arg)}"' for arg in args) + "]")
+    if ai_memory_home:
+        lines.append(f'env = {{ AI_MEMORY_HOME = "{_toml_string(str(ai_memory_home.expanduser()))}" }}')
+    lines.extend(
+        [
+            "startup_timeout_sec = 10",
+            "tool_timeout_sec = 60",
+            'default_tools_approval_mode = "auto"',
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def install_watcher_service(interval_seconds: float = 10.0) -> InstallResult:
+    system = platform.system().lower()
+    if system == "darwin":
+        return _install_launch_agent(interval_seconds)
+    if system == "windows":
+        return _install_windows_task(interval_seconds)
+    if system == "linux":
+        return _install_systemd_user_service(interval_seconds)
+    return InstallResult(False, f"Unsupported platform: {platform.system()}")
+
+
+def _install_launch_agent(interval_seconds: float) -> InstallResult:
+    command = resolve_aimemory_command()
+    args = [*command, "watch", "--interval", str(interval_seconds)]
+    home = Path.home()
+    plist_path = home / "Library" / "LaunchAgents" / f"{WATCHER_LABEL}.plist"
+    logs_dir = home / ".ai-memory" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    plist = {
+        "Label": WATCHER_LABEL,
+        "ProgramArguments": args,
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": str(logs_dir / "watcher.out.log"),
+        "StandardErrorPath": str(logs_dir / "watcher.err.log"),
+        "WorkingDirectory": str(home),
+    }
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    with plist_path.open("wb") as handle:
+        plistlib.dump(plist, handle)
+
+    uid = os.getuid()
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}", str(plist_path)], check=False)
+    subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)], check=False)
+    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{uid}/{WATCHER_LABEL}"], check=False)
+    return InstallResult(True, "Watcher LaunchAgent installed and started.", str(plist_path))
+
+
+def _install_windows_task(interval_seconds: float) -> InstallResult:
+    command = " ".join(_quote_win(part) for part in [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)])
+    result = subprocess.run(
+        [
+            "schtasks",
+            "/Create",
+            "/F",
+            "/SC",
+            "ONLOGON",
+            "/TN",
+            "AI Memory Watcher",
+            "/TR",
+            command,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return InstallResult(False, result.stderr.strip() or result.stdout.strip())
+    return InstallResult(True, "Watcher scheduled task installed.", "AI Memory Watcher")
+
+
+def _install_systemd_user_service(interval_seconds: float) -> InstallResult:
+    command = " ".join(_quote_shell(part) for part in [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)])
+    service_dir = Path("~/.config/systemd/user").expanduser()
+    service_path = service_dir / "ai-memory-watcher.service"
+    service_dir.mkdir(parents=True, exist_ok=True)
+    service_path.write_text(
+        f"""[Unit]
+Description=AI Memory watcher
+
+[Service]
+ExecStart={command}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+""",
+        encoding="utf-8",
+    )
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    subprocess.run(["systemctl", "--user", "enable", "--now", "ai-memory-watcher.service"], check=False)
+    return InstallResult(True, "Watcher systemd user service installed.", str(service_path))
+
+
+def _toml_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _quote_shell(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _quote_win(value: str) -> str:
+    escaped = value.replace('"', r"\"")
+    return f'"{escaped}"' if " " in escaped else escaped

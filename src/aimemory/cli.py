@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
-import sys
+import shlex
 from pathlib import Path
 
 from aimemory.cloud import LocalFolderProvider
+from aimemory.installer import install_mcp_config, install_watcher_service, resolve_mcp_command
 from aimemory.service import MemoryService
 from aimemory.sync import SyncService
 from aimemory.watcher import WatcherService
@@ -53,6 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_parser = sub.add_parser("mcp-config", help="Print Codex MCP setup snippets.")
     mcp_parser.add_argument("--server-name", default="ai-memory")
     mcp_parser.add_argument("--ai-memory-home", type=Path, default=None)
+
+    install_mcp_parser = sub.add_parser("install-mcp", help="Write AI Memory into Codex MCP config.")
+    install_mcp_parser.add_argument("--server-name", default="ai-memory")
+    install_mcp_parser.add_argument("--ai-memory-home", type=Path, default=None)
+
+    install_watcher_parser = sub.add_parser("install-watcher", help="Install watcher at user login.")
+    install_watcher_parser.add_argument("--interval", type=float, default=10.0)
+
+    sub.add_parser("desktop", help="Open the AI Memory desktop app.")
+    sub.add_parser("mcp-server", help="Run the AI Memory MCP server over stdio.")
 
     return parser
 
@@ -113,17 +123,32 @@ def main(argv: list[str] | None = None) -> int:
         print(_mcp_config(args.server_name, args.ai_memory_home))
         return 0
 
+    if args.command == "install-mcp":
+        result = install_mcp_config(args.server_name, ai_memory_home=args.ai_memory_home)
+        print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "install-watcher":
+        result = install_watcher_service(interval_seconds=args.interval)
+        print(json.dumps(result.__dict__, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "desktop":
+        from aimemory.desktop import main as desktop_main
+
+        return desktop_main()
+
+    if args.command == "mcp-server":
+        from aimemory.mcp.server import main as mcp_main
+
+        mcp_main()
+        return 0
+
     raise SystemExit(f"Unknown command: {args.command}")
 
 
 def _mcp_config(server_name: str, home: Path | None) -> str:
-    executable = shutil.which("aimemory-mcp")
-    if executable:
-        command = executable
-        args: list[str] = []
-    else:
-        command = sys.executable
-        args = ["-m", "aimemory.mcp.server"]
+    command, args = resolve_mcp_command()
 
     env_line = ""
     cli_env = ""
@@ -137,9 +162,9 @@ def _mcp_config(server_name: str, home: Path | None) -> str:
         quoted_args = ", ".join(f'"{arg}"' for arg in args)
         args_line = f"\nargs = [{quoted_args}]"
 
-    cli_command = f"codex mcp add {server_name}{cli_env} -- {command}"
+    cli_command = f"codex mcp add {shlex.quote(server_name)}{cli_env} -- {shlex.quote(command)}"
     if args:
-        cli_command += " " + " ".join(args)
+        cli_command += " " + " ".join(shlex.quote(arg) for arg in args)
 
     return f"""# CLI
 {cli_command}

@@ -36,6 +36,8 @@ tool_timeout_sec = 60
 default_tools_approval_mode = "auto"
 ```
 
+If you install AI Memory from a GitHub Release executable, the GUI writes a similar config but points Codex back to the downloaded executable with the `mcp-server` argument.
+
 Codex, the ChatGPT desktop app, and the Codex IDE extension share the same MCP configuration on a Codex host. In Codex, use `/mcp` to verify that `ai-memory` is connected.
 
 The server currently exposes:

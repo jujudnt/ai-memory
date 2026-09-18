@@ -11,13 +11,15 @@
 - Transport-neutral MCP tool handlers
 - Real stdio MCP entry point through `aimemory-mcp`
 - Polling watcher with a status file for desktop UI integration
+- First local-browser desktop UI
+- GitHub Actions CI and release builds for macOS and Windows
 
 ## Next Phase
 
 1. Add deterministic chunking around user/assistant/tool groups.
 2. Add local embeddings and LanceDB behind an optional semantic-search interface.
-3. Replace polling with the watchdog-based background collector and startup service installers.
-4. Build the first desktop UI around setup, MCP enablement, and watcher status.
+3. Replace polling with the watchdog-based background collector.
+4. Improve the desktop UI with provider setup, onboarding steps, and tray/menu-bar mode.
 5. Add rclone-backed providers for Google Drive, iCloud Drive, OneDrive, and Dropbox.
 6. Add GitHub private repository provider with visibility checks.
 7. Add optional encrypted archives using established cryptographic libraries and OS-native key storage.
