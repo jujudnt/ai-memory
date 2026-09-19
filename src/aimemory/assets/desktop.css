@@ -543,6 +543,17 @@ details > p {
 .setting-section a {
   font-size: 12px;
 }
+.icloud-approval {
+  margin-top: 14px;
+  border-left: 3px solid var(--green);
+  padding: 8px 0 8px 12px;
+  font-size: 12px;
+}
+.icloud-approval p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
 @media (max-width: 650px) {
   .app-header {
     height: 68px;

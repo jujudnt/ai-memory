@@ -16,6 +16,17 @@ from aimemory.cloud.providers import provider_label
 from aimemory.state import now, read_json, write_json
 
 
+ICLOUD_WEB_APPROVAL_MESSAGE = (
+    "Le code 2FA a été accepté. La Protection avancée des données bloque encore iCloud Drive : "
+    "sur l'iPhone, ouvrez Réglages > compte Apple > iCloud et activez Accès aux données iCloud "
+    "sur le Web, puis approuvez la demande Apple éventuelle et cliquez sur Réessayer iCloud."
+)
+
+
+class ICloudWebApprovalRequired(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class RcloneProviderSpec:
     provider: str
@@ -70,14 +81,16 @@ class RcloneCloudProvider:
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"{provider_label(self.spec.provider)} n'a pas répondu. Réessayez.") from None
         if result.returncode:
-            if args[0] == "config":
-                raise RuntimeError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode))
+            if self.spec.provider == "icloud-online" and _icloud_web_approval_error(result.stderr):
+                raise ICloudWebApprovalRequired(ICLOUD_WEB_APPROVAL_MESSAGE)
             raise RuntimeError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode))
         return result.stdout
 
     def connect(self, options: dict | None = None) -> dict | None:
         options = options or {}
         if self.spec.provider == "icloud-online":
+            if options.get("resume_after_approval"):
+                return self._finish_icloud_connect()
             code = str(options.get("two_factor_code") or "").strip()
             if code:
                 return self._continue_icloud_connect(code)
@@ -135,11 +148,32 @@ class RcloneCloudProvider:
         state = read_json(self.icloud_auth_state_path)
         if not state or not self.icloud_pending_config.is_file():
             return {}
+        if state.get("status") == "needs_2fa" and self._icloud_session_is_trusted():
+            state = self._set_icloud_web_approval(state)
         return state
 
     def cancel_pending_icloud_auth(self) -> None:
         self.icloud_pending_config.unlink(missing_ok=True)
         self.icloud_auth_state_path.unlink(missing_ok=True)
+
+    def _icloud_session_is_trusted(self) -> bool:
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read(self.icloud_pending_config)
+        section = self.spec.remote_name
+        return (
+            parser.has_section(section)
+            and bool(parser.get(section, "trust_token", fallback=""))
+            and not parser.get(section, "_auth_session", fallback="")
+        )
+
+    def _set_icloud_web_approval(self, previous: dict | None = None) -> dict:
+        state = {
+            "status": "needs_web_approval",
+            "started_at": (previous or {}).get("started_at") or now(),
+            "message": ICLOUD_WEB_APPROVAL_MESSAGE,
+        }
+        write_json(self.icloud_auth_state_path, state)
+        return state
 
     def _begin_icloud_connect(self, options: dict) -> dict:
         apple_id = str(options.get("apple_id") or "").strip()
@@ -209,21 +243,26 @@ class RcloneCloudProvider:
         if not state:
             self.cancel_pending_icloud_auth()
             raise RuntimeError("La session Apple a expiré. Recommencez avec l'Apple ID et le mot de passe.")
-        output = self.run(
-            [
-                "config",
-                "update",
-                self.spec.remote_name,
-                "--continue",
-                "--state",
-                state,
-                "--result",
-                code,
-                "--non-interactive",
-            ],
-            timeout=300,
-            config=self.icloud_pending_config,
-        )
+        try:
+            output = self.run(
+                [
+                    "config",
+                    "update",
+                    self.spec.remote_name,
+                    "--continue",
+                    "--state",
+                    state,
+                    "--result",
+                    code,
+                    "--non-interactive",
+                ],
+                timeout=300,
+                config=self.icloud_pending_config,
+            )
+        except ICloudWebApprovalRequired:
+            if self._icloud_session_is_trusted():
+                return self._set_icloud_web_approval(auth)
+            raise
         result = _config_result(output)
         if result.get("State"):
             auth.update(state=result["State"], message=result.get("Option", {}).get("Help") or auth["message"])
@@ -236,10 +275,13 @@ class RcloneCloudProvider:
         parser = configparser.ConfigParser(interpolation=None)
         parser.read(pending)
         section = self.spec.remote_name
-        if not parser.has_section(section) or not parser.has_option(section, "trust_token"):
+        if not self._icloud_session_is_trusted():
             raise RuntimeError("iCloud n'a pas renvoyé de session de confiance.")
         pending.chmod(0o600)
-        self.run(["mkdir", self.spec.remote], config=pending)
+        try:
+            self.run(["mkdir", self.spec.remote], config=pending)
+        except ICloudWebApprovalRequired:
+            return self._set_icloud_web_approval(read_json(self.icloud_auth_state_path))
         os.replace(pending, self.config)
         self.icloud_auth_state_path.unlink(missing_ok=True)
         write_json(
@@ -337,11 +379,22 @@ def _config_result(output: str) -> dict:
     return result
 
 
+def _icloud_web_approval_error(output: str | bytes | None) -> bool:
+    text = (output or "").decode("utf-8", "ignore") if isinstance(output, bytes) else (output or "")
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in ("missing x-apple-webauth-token", "missing pcs cookies", "requestpcs(")
+    )
+
+
 def _friendly_rclone_error(provider: str, output: str | bytes | None, code: int) -> str:
     text = (output or "").decode("utf-8", "ignore") if isinstance(output, bytes) else (output or "")
     lowered = text.lower()
     name = provider_label(provider)
     if provider == "icloud-online":
+        if _icloud_web_approval_error(text):
+            return ICLOUD_WEB_APPROVAL_MESSAGE
         if any(marker in lowered for marker in ("2fa", "two-factor", "verification", "mfa", "auth", "unauthorized", "forbidden")):
             return (
                 "iCloud Drive attend le code de validation Apple. Saisissez le code 2FA affiché sur votre iPhone "

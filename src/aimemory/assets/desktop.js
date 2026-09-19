@@ -6,6 +6,7 @@ let requestBusy = false;
 let lastJobMessage = "";
 let switchingCloud = false;
 let icloudAwaiting2FA = false;
+let icloudAwaitingWebApproval = false;
 const size = (value) => {
   const n = Math.max(0, Number(value || 0));
   const units = ["o", "Ko", "Mo", "Go", "To"];
@@ -65,8 +66,15 @@ const providerNotes = {
 };
 const icloud2faMessage =
   "Code demand\u00e9. Validez la demande Apple sur votre appareil, entrez le code ici, puis cliquez sur Confirmer le code iCloud.";
+const icloudWebApprovalMessage =
+  "Le code est accept\u00e9. Activez Acc\u00e8s aux donn\u00e9es iCloud sur le Web dans R\u00e9glages > compte Apple > iCloud, approuvez la demande Apple \u00e9ventuelle, puis cliquez sur R\u00e9essayer iCloud.";
 function isIcloud2FAError(message = "") {
   return /iCloud Drive attend|2FA|code de validation Apple|code Apple|two-factor|verification/i.test(
+    message,
+  );
+}
+function isIcloudWebApprovalError(message = "") {
+  return /Protection avancée|Accès aux données iCloud sur le Web|X-APPLE-WEBAUTH-TOKEN|PCS/i.test(
     message,
   );
 }
@@ -74,6 +82,7 @@ function revealIcloud2FA() {
   if ($("#provider").value !== "icloud-online") return;
   const wasWaiting = icloudAwaiting2FA;
   icloudAwaiting2FA = true;
+  icloudAwaitingWebApproval = false;
   switchingCloud = true;
   $("#icloud-password").value = "";
   if (!wasWaiting) $("#icloud-2fa").value = "";
@@ -81,6 +90,17 @@ function revealIcloud2FA() {
   updateProviderFields();
   notice(icloud2faMessage);
   requestAnimationFrame(() => $("#icloud-2fa").focus());
+}
+function revealIcloudWebApproval() {
+  if ($("#provider").value !== "icloud-online") return;
+  icloudAwaiting2FA = false;
+  icloudAwaitingWebApproval = true;
+  switchingCloud = true;
+  $("#icloud-password").value = "";
+  $("#icloud-2fa").value = "";
+  settings();
+  updateProviderFields();
+  notice(icloudWebApprovalMessage);
 }
 function notice(message, error = false) {
   for (const selector of ["#message", "#settings-message"]) {
@@ -265,26 +285,35 @@ function render(data) {
   const pendingIcloud =
     data.icloud_auth?.status === "needs_2fa" ||
     data.job?.result?.status === "needs_2fa";
+  const pendingIcloudWebApproval =
+    data.icloud_auth?.status === "needs_web_approval" ||
+    data.job?.result?.status === "needs_web_approval";
   if (
-    icloudAwaiting2FA &&
+    (icloudAwaiting2FA || icloudAwaitingWebApproval) &&
     !pendingIcloud &&
+    !pendingIcloudWebApproval &&
     configured &&
     storage.provider === "icloud-online" &&
     !data.job?.running &&
     !data.job?.error
   ) {
     icloudAwaiting2FA = false;
+    icloudAwaitingWebApproval = false;
     switchingCloud = false;
     $("#icloud-2fa").value = "";
   }
-  if (pendingIcloud && !icloudAwaiting2FA) {
+  if (pendingIcloudWebApproval && !icloudAwaitingWebApproval) {
+    $("#provider").value = "icloud-online";
+    revealIcloudWebApproval();
+  } else if (pendingIcloud && !icloudAwaiting2FA) {
     $("#provider").value = "icloud-online";
     revealIcloud2FA();
   } else if (
     data.job?.error &&
     $("#provider").value === "icloud-online" &&
     isIcloud2FAError(data.job.message) &&
-    !icloudAwaiting2FA
+    !icloudAwaiting2FA &&
+    !icloudAwaitingWebApproval
   ) {
     revealIcloud2FA();
   } else if (data.job?.message && data.job.message !== lastJobMessage) {
@@ -322,13 +351,14 @@ async function action(name, body = {}) {
         provider: $("#provider").value,
         folder: $("#folder").value,
         oauth_client: file ? JSON.parse(await file.text()) : null,
-        icloud_apple_id: icloudAwaiting2FA
+        icloud_apple_id: icloudAwaiting2FA || icloudAwaitingWebApproval
           ? ""
           : $("#icloud-apple-id").value,
-        icloud_password: icloudAwaiting2FA
+        icloud_password: icloudAwaiting2FA || icloudAwaitingWebApproval
           ? ""
           : $("#icloud-password").value,
         icloud_2fa: icloudAwaiting2FA ? $("#icloud-2fa").value : "",
+        icloud_resume: icloudAwaitingWebApproval,
         onedrive_type: $("#onedrive-type").value,
       };
     }
@@ -346,14 +376,22 @@ async function action(name, body = {}) {
       switchingCloud = false;
     if (name === "connect-cloud" || name === "disconnect-cloud")
       icloudAwaiting2FA = false;
+    if (name === "connect-cloud" || name === "disconnect-cloud")
+      icloudAwaitingWebApproval = false;
     notice(data.message);
     await refresh();
   } catch (error) {
+    const wantsIcloudWebApproval =
+      name === "connect-cloud" &&
+      $("#provider").value === "icloud-online" &&
+      isIcloudWebApprovalError(error.message);
     const wantsIcloudCode =
       name === "connect-cloud" &&
       $("#provider").value === "icloud-online" &&
       isIcloud2FAError(error.message);
-    if (wantsIcloudCode) {
+    if (wantsIcloudWebApproval) {
+      revealIcloudWebApproval();
+    } else if (wantsIcloudCode) {
       revealIcloud2FA();
     } else {
       notice(error.message, true);
@@ -376,6 +414,7 @@ $("#menubar-login").addEventListener("change", async (event) => {
 $("#cloud-switch").addEventListener("click", () => {
   switchingCloud = true;
   icloudAwaiting2FA = false;
+  icloudAwaitingWebApproval = false;
   render(current);
   $("#provider").focus();
 });
@@ -388,22 +427,31 @@ function updateProviderFields() {
   $("#folder-label").hidden = !customFolder;
   $("#oauth-settings").hidden = !google;
   $("#icloud-fields").hidden = !icloudOnline;
-  $("#icloud-credentials").hidden = icloudOnline && icloudAwaiting2FA;
+  $("#icloud-credentials").hidden =
+    icloudOnline && (icloudAwaiting2FA || icloudAwaitingWebApproval);
   $("#icloud-2fa-label").hidden = !icloudOnline || !icloudAwaiting2FA;
-  $("#icloud-flow-help").hidden = icloudOnline && icloudAwaiting2FA;
+  $("#icloud-web-approval").hidden =
+    !icloudOnline || !icloudAwaitingWebApproval;
+  $("#icloud-flow-help").hidden =
+    icloudOnline && (icloudAwaiting2FA || icloudAwaitingWebApproval);
   $("#onedrive-fields").hidden = !onedriveOnline;
   const label = providerNames[value] || "la destination";
   $('[data-action="connect-cloud"]').textContent =
-    icloudOnline && icloudAwaiting2FA
-      ? "Confirmer le code iCloud"
-      : `Connecter ${label}`;
+    icloudOnline && icloudAwaitingWebApproval
+      ? "R\u00e9essayer iCloud"
+      : icloudOnline && icloudAwaiting2FA
+        ? "Confirmer le code iCloud"
+        : `Connecter ${label}`;
   $("#provider-note").textContent =
-    icloudOnline && icloudAwaiting2FA
-      ? icloud2faMessage
-      : providerNotes[value] || providerNotes["local-folder"];
+    icloudOnline && icloudAwaitingWebApproval
+      ? icloudWebApprovalMessage
+      : icloudOnline && icloudAwaiting2FA
+        ? icloud2faMessage
+        : providerNotes[value] || providerNotes["local-folder"];
 }
 $("#provider").addEventListener("change", () => {
   icloudAwaiting2FA = false;
+  icloudAwaitingWebApproval = false;
   $("#icloud-2fa").value = "";
   updateProviderFields();
 });

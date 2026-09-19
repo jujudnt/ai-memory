@@ -47,6 +47,8 @@ V0.4.4 fixes the real asynchronous Apple 2FA flow: once iCloud asks for validati
 
 V0.4.5 preserves rclone's pending Apple authentication session between the password and 2FA steps. Confirming the six-digit code now resumes that session instead of triggering a second Apple login notification. The credentials fields are hidden and cleared while confirmation is pending. Before switching accounts or providers, AI Memory also performs a download-only pass against the old destination, then uploads the consolidated current conversation set to the new destination; a full old account therefore does not block migration. Connector tests cover Google Drive, Dropbox, OneDrive, iCloud Drive, local cloud folders, and old-to-new destination migration.
 
+V0.4.6 distinguishes successful Apple 2FA from the later Advanced Data Protection PCS-cookie approval. Accounts blocked by `Missing X-APPLE-WEBAUTH-TOKEN` now keep their accepted trust token and show a dedicated Web-access approval step with an idempotent retry, instead of returning to Apple ID/password/2FA fields or requesting another code. Existing pending v0.4.5 sessions are upgraded automatically.
+
 ## macOS Gatekeeper
 
 The macOS build is ad-hoc signed, but it is not notarized with an Apple Developer ID yet. macOS may still show an unidentified developer or malware-verification warning after download.
