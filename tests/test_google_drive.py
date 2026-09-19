@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -169,7 +170,8 @@ def test_browser_cloud_connectors_create_a_tokenized_remote(tmp_path, monkeypatc
         key = expected[index]
         assert create_call[create_call.index(key) + 1] == expected[index + 1]
     assert "private" not in str(read_json(provider.paths.state / "cloud.json"))
-    assert provider.config.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert provider.config.stat().st_mode & 0o777 == 0o600
 
 
 def test_icloud_code_without_a_pending_session_is_rejected(tmp_path):
