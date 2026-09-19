@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,6 +119,7 @@ class RcloneCloudProvider:
                     "root": "AI-Memory",
                     "remote": self.spec.remote_name,
                     "mode": "online",
+                    "connection_id": uuid.uuid4().hex,
                 },
             )
             write_json(self.paths.state / "sync-status.json", {"status": "connected"})

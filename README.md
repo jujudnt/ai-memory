@@ -14,14 +14,14 @@ This repository intentionally starts with the data-safe core:
 - Local SQLite metadata plus FTS5 search under `db/memory.sqlite`
 - Google Drive, Dropbox, OneDrive and iCloud Drive cloud connections through the bundled rclone helper
 - iCloud Drive, OneDrive, Dropbox and custom synchronized-folder destinations for local-client workflows
-- Automatic bidirectional synchronization of immutable archives, with checksum verification
+- Automatic bidirectional synchronization of immutable archives, with checksum verification and cloud-confirmed local retention
 - Full compressed source backups, preserved conversation revisions, and an import integrity audit
 - Local-folder synchronization, also usable with a folder managed by iCloud, OneDrive or Dropbox
 - A real stdio MCP server entry point for Codex, Claude Desktop and VS Code
 - A polling watcher with a status file that a desktop UI can display
 - A compact local dashboard with settings for Drive, MCP and diagnostics
 - A native macOS menu-bar icon with watcher health, last scan, login startup and single-instance protection
-- Archive size, index size, total local storage, automatic release-cache cleanup, cloud transfer progress and last successful synchronization
+- Conversation size, index size, total local storage, automatic cleanup after verified cloud backup, cloud transfer progress and last successful synchronization
 
 No hosted backend, paid embedding API, or proprietary vector service is required.
 
@@ -39,11 +39,13 @@ On macOS, the layered memory icon stays in the menu bar when the browser closes.
 
 On a second computer, connect the same Google account and let synchronization finish. Its local search index is built from the downloaded archives. Neither SQLite nor Google credentials are uploaded. Synchronization does not delete cloud history or restore conversations into Codex's native sidebar.
 
-Cloud transfers run after connection, with the synchronization icon, or every minute while the watcher is running. The first full backup can be large. The UI reports bytes transferred, speed, last activity, errors, and last success. Interrupted copies resume by skipping immutable objects already present.
+Cloud transfers run after connection, with the synchronization icon, or every minute while the watcher is running. The first full backup can be large. The UI reports transferred objects, last activity, errors, last success, and how much local space was reclaimed. Interrupted copies resume by skipping immutable objects already present.
+
+After a successful cloud transfer, AI Memory automatically removes the verified local copies of compressed originals and old immutable revisions. It keeps the current normalized conversations and SQLite search index on the computer so MCP search remains fast and works offline. The watcher remembers cloud-confirmed objects, so unchanged conversations are not reimported merely because their heavy local backup was cleaned. Changing cloud destination resets that confirmation for the new account and sends the current conversation set again.
 
 If a cloud destination is full, AI Memory stops the transfer with an explicit quota message. Free space in that account or use **Changer de destination** to connect another cloud account without deleting local backups. Folder-based providers check local free space before copying; their official client then handles the cloud upload.
 
-Cloud archives are **not end-to-end encrypted** in this version. rclone credentials are stored in the local `credentials` directory, restricted to the local user on macOS/Linux. Disconnect removes the local authorization and keeps both local and remote backups; revoke rclone access in the provider account to revoke the grant itself.
+Cloud archives are **not end-to-end encrypted** in this version. rclone credentials are stored in the local `credentials` directory, restricted to the local user on macOS/Linux. Disconnect removes the local authorization, keeps the searchable current conversations on the computer, and does not delete the remote archive; revoke rclone access in the provider account to revoke the grant itself.
 
 **iCloud Drive online:** use the normal Apple ID password. AI Memory first asks Apple to start the login; after Apple shows a 2FA code on a trusted device, AI Memory reveals the code field and the button becomes **Confirmer le code iCloud**. App-specific passwords are not accepted by rclone's iCloud Drive backend. If you want the iCloud account already connected to this Mac, choose **iCloud Drive du Mac** instead.
 
@@ -88,7 +90,7 @@ This release implements the Codex/Claude + rclone cloud/folder-cloud + local MCP
 4. Ingest metadata and message text into SQLite FTS5.
 5. Search locally.
 6. Expose reusable service methods for CLI, GUI, and MCP.
-7. Run a local stdio MCP server for Codex.
+7. Run a local stdio MCP server for Codex, Claude Desktop and VS Code.
 8. Track watcher health for the future desktop app.
 9. Package a first desktop executable through GitHub Releases.
 
@@ -97,10 +99,10 @@ Still pending: semantic/vector search, filesystem event collection instead of po
 ### Storage layout
 
 - `~/.ai-memory/archive/sources`: current normalized conversations.
-- `~/.ai-memory/archive/raw`: compressed, byte-verifiable original JSONL snapshots. Growing sessions store an initial full snapshot followed by compressed append deltas; source rewrites create a new full snapshot. `read_raw` reconstructs and checks the exact original bytes.
-- `~/.ai-memory/archive/snapshots`: immutable normalized revisions, including divergent versions.
+- `~/.ai-memory/archive/raw`: compressed, byte-verifiable original JSONL snapshots waiting for cloud confirmation. After successful synchronization, these heavy local copies are removed while the verified objects remain in the configured cloud archive.
+- `~/.ai-memory/archive/snapshots`: immutable normalized revisions waiting for cloud confirmation, including divergent versions. Verified revisions are also cleaned locally after synchronization.
 - `~/.ai-memory/db/memory.sqlite`: local full-text search index.
-- `~/.ai-memory/cache/exchange`: transfer cache; included in total local storage.
+- `~/.ai-memory/cache/incoming`: temporary download verification area, deleted after every synchronization attempt.
 - `~/.ai-memory/state/audit.json`: last verification report.
 
 The latest conversation revision is indexed by timestamp and item count. Older and divergent revisions remain preserved in the archive; automatic semantic conflict merging is not implemented. Source conversation identifiers take precedence over inherited parent session identifiers, so forks remain separate.

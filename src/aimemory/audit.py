@@ -15,8 +15,10 @@ from aimemory.state import now, read_json, write_json
 def audit_codex(service, codex_home: Path | None = None) -> dict:
     adapter = CodexAdapter(codex_home)
     manifest = read_json(service.paths.state / "source-manifest.json")
+    synced_objects = read_json(service.paths.state / "synced-objects.json")
     result = {"checked_at": now(), "files": 0, "verified_files": 0, "source_bytes": 0,
-              "unique_sessions": 0, "issues": [], "changing_files": [], "missing_thread_ids": []}
+              "unique_sessions": 0, "cloud_pruned_files": 0, "issues": [],
+              "changing_files": [], "missing_thread_ids": []}
     ids = set()
     for session in adapter.scan_sessions():
         result["files"] += 1
@@ -27,7 +29,13 @@ def audit_codex(service, codex_home: Path | None = None) -> dict:
             parsed = adapter.parse_session(session.path, raw)
             ids.add(parsed.source_session_id)
             digest = hashlib.sha256(raw).hexdigest()
-            restored = read_raw(service.paths.archive, entry["raw_path"])
+            raw_path = entry["raw_path"]
+            if not (service.paths.archive / raw_path).exists() and synced_objects.get(raw_path):
+                if not service.db.get_conversation_row(parsed.id):
+                    raise ValueError("Conversation missing from index")
+                result["cloud_pruned_files"] += 1
+                continue
+            restored = read_raw(service.paths.archive, raw_path)
             if hashlib.sha256(restored).hexdigest() != entry.get("sha256"):
                 raise ValueError("Raw backup checksum differs from the imported snapshot")
             if entry.get("sha256") != digest:

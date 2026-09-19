@@ -67,6 +67,7 @@ class MemoryService:
         sessions = adapter.scan_sessions()
         manifest_path = self.paths.state / "source-manifest.json"
         manifest = read_json(manifest_path)
+        synced_objects = read_json(self.paths.state / "synced-objects.json")
         imported = 0
         skipped = 0
         errors = []
@@ -77,7 +78,10 @@ class MemoryService:
                 and entry.get("size") == session.size
                 and entry.get("mtime_ns") == session.path.stat().st_mtime_ns
                 and entry.get("parser_version") == getattr(adapter, "parser_version", 2)
-                and (self.paths.archive / entry.get("raw_path", "missing")).is_file()
+                and (
+                    (self.paths.archive / entry.get("raw_path", "missing")).is_file()
+                    or bool(synced_objects.get(entry.get("raw_path", "")))
+                )
                 and self.db.get_conversation_row(entry.get("conversation_id", ""))
             ):
                 skipped += 1
@@ -193,6 +197,7 @@ class MemoryService:
         status["sync"] = read_json(self.paths.state / "sync-status.json")
         status["audit"] = read_json(self.paths.state / "audit.json")
         status["cleanup"] = read_json(self.paths.state / "cleanup-status.json")
+        status["retention"] = read_json(self.paths.state / "retention-status.json")
         status["watcher"] = self.watcher_status()
         return status
 

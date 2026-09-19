@@ -43,6 +43,8 @@ V0.4.2 adds the missing iCloud Drive 2FA input field and passes rclone's `config
 
 V0.4.3 turns iCloud Drive online setup into a two-step Apple 2FA flow, installs the same local MCP server for detected Codex, Claude Desktop and VS Code clients, documents the release-app MCP setup path, labels Claude Desktop/VS Code sources separately, and maps Codex/Claude conversations back to local project folders when the source exposes them.
 
+V0.4.4 fixes the real asynchronous Apple 2FA flow: once iCloud asks for validation, the open settings panel reveals the code field and changes the action to **Confirmer le code iCloud**. It also replaces the persistent full transfer cache with object-by-object synchronization, removes raw originals and historical revisions from the Mac only after their cloud writes succeed, preserves the local searchable conversation set, and resets cloud confirmation when the destination account changes.
+
 ## macOS Gatekeeper
 
 The macOS build is ad-hoc signed, but it is not notarized with an Apple Developer ID yet. macOS may still show an unidentified developer or malware-verification warning after download.

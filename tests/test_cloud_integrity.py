@@ -59,8 +59,10 @@ def test_two_devices_converge_and_conflicts_are_retained(tmp_path):
     a.sync_now()
     assert len(a.search("new message")) == 1
     assert len(a.list_conversations()) == 1
-    assert len(list((a.paths.archive / "snapshots").rglob("*.json.*"))) >= 2
-    assert len(list((a.paths.archive / "raw").rglob("*.gz"))) == 2
+    assert len(list((remote / "snapshots").rglob("*.json.*"))) >= 2
+    assert len(list((remote / "raw").rglob("*.gz"))) == 2
+    assert not list((a.paths.archive / "snapshots").rglob("*.json.*"))
+    assert not list((a.paths.archive / "raw").rglob("*.gz"))
     # Re-importing an older source cannot revert the synced conversation.
     a.import_codex(codex_a, force=True)
     assert len(a.search("new message")) == 1
@@ -104,7 +106,7 @@ def test_simultaneous_edits_with_same_timestamp_converge(tmp_path):
     a.sync_now()
     key = a.list_conversations()[0]["id"]
     assert a.get_conversation(key).to_dict() == b.get_conversation(key).to_dict()
-    assert len(list((a.paths.archive / "snapshots").rglob("*.json.*"))) == 2
+    assert len(list((tmp_path / "remote" / "snapshots").rglob("*.json.*"))) == 2
 
 
 def test_legacy_inherited_session_id_cannot_replace_repaired_archive(tmp_path):
@@ -123,17 +125,26 @@ def test_legacy_inherited_session_id_cannot_replace_repaired_archive(tmp_path):
 
 
 def test_cloud_transfer_does_not_block_local_import(tmp_path, monkeypatch):
-    from aimemory.cloud.google_drive import GoogleDriveProvider
     from filelock import FileLock
     service = memory(tmp_path / "memory")
     write_json(service.paths.state / "cloud.json", {"provider": "google-drive"})
     codex = tmp_path / "codex"
     session(codex)
-    def exchange(self, local, progress):
-        with FileLock(str(service.paths.state / "operations.lock"), timeout=0):
+
+    class Remote:
+        def list(self, progress):
+            with FileLock(str(service.paths.state / "operations.lock"), timeout=0):
+                pass
+            assert service.import_codex(codex).imported == 1
+            return set()
+
+        def upload(self, local_path, relative):
             pass
-        assert service.import_codex(codex).imported == 1
-    monkeypatch.setattr(GoogleDriveProvider, "exchange", exchange)
+
+        def download(self, relative, local_path):
+            raise AssertionError("No downloads expected")
+
+    monkeypatch.setattr("aimemory.sync.cloud_sync._remote_archive", lambda paths, config: Remote())
     service.sync_now()
     assert service.status()["conversation_count"] == 1
 
@@ -171,8 +182,56 @@ def test_cloud_restores_append_delta_backups(tmp_path):
         write_json(service.paths.state / "cloud.json", {"provider": "local-folder", "root": str(tmp_path / "remote")})
     a.sync_now()
     b.sync_now()
-    assert read_raw(b.paths.archive, entry["raw_path"]) == path.read_bytes()
+    assert read_raw(tmp_path / "remote", entry["raw_path"]) == path.read_bytes()
     assert b.search("new answer")
+
+
+def test_synced_raw_is_pruned_without_reimport_loop(tmp_path):
+    service = memory(tmp_path / "memory")
+    codex = tmp_path / "codex"
+    session(codex)
+    remote = tmp_path / "remote"
+    write_json(service.paths.state / "cloud.json", {"provider": "local-folder", "root": str(remote)})
+
+    assert service.import_codex(codex).imported == 1
+    result = service.sync_now()
+
+    assert result["retention"]["removed_raw_count"] == 1
+    assert result["retention"]["removed_revision_count"] == 1
+    assert not list((service.paths.archive / "raw").rglob("*.gz"))
+    assert not list((service.paths.archive / "snapshots").rglob("*.json.*"))
+    assert list((remote / "raw").rglob("*.gz"))
+    assert list((remote / "snapshots").rglob("*.json.*"))
+    assert service.import_codex(codex).skipped == 1
+    report = service.audit_codex(codex)
+    assert report["ok"]
+    assert report["cloud_pruned_files"] == 1
+
+
+def test_changing_destination_reuploads_current_conversations(tmp_path):
+    service = memory(tmp_path / "memory")
+    codex = tmp_path / "codex"
+    session(codex)
+    first = tmp_path / "first-remote"
+    second = tmp_path / "second-remote"
+    write_json(
+        service.paths.state / "cloud.json",
+        {"provider": "local-folder", "root": str(first), "connection_id": "first"},
+    )
+    service.import_codex(codex)
+    service.sync_now()
+    assert not list((service.paths.archive / "snapshots").rglob("*.json.*"))
+
+    write_json(
+        service.paths.state / "cloud.json",
+        {"provider": "local-folder", "root": str(second), "connection_id": "second"},
+    )
+    service.sync_now()
+
+    assert list((second / "snapshots").rglob("*.json.*"))
+    assert service.search("hello")
+    # The old destination is never deleted when switching accounts.
+    assert list((first / "raw").rglob("*.gz"))
 
 
 def test_local_cloud_provider_reports_insufficient_space(tmp_path, monkeypatch):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import uuid
 import webbrowser
 import secrets
 import sys
@@ -146,7 +147,14 @@ class Handler(BaseHTTPRequestHandler):
                     validate_sync_root(root, self.state.service.paths.home)
                     root.mkdir(parents=True, exist_ok=True)
                     with _cloud_config_lock(self.state.service):
-                        write_json(self.state.service.paths.state / "cloud.json", {"provider": provider, "root": str(root)})
+                        write_json(
+                            self.state.service.paths.state / "cloud.json",
+                            {
+                                "provider": provider,
+                                "root": str(root),
+                                "connection_id": uuid.uuid4().hex,
+                            },
+                        )
                 else:
                     raise ValueError("Unknown provider")
                 return self.state.service.sync_now()
@@ -162,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     (self.state.service.paths.state / "cloud.json").unlink(missing_ok=True)
                 write_json(self.state.service.paths.state / "sync-status.json", {"status": "disconnected"})
-            self._send_json({"message": "Deconnecte. Les sauvegardes locales et distantes sont conservees."})
+            self._send_json({"message": "Deconnecte. Les conversations locales et la sauvegarde distante sont conservees."})
             return
         if self.path == "/api/sync":
             self._send_json(self.state.start_job("Synchronisation", self.state.service.sync_now))

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from aimemory.state import write_json
@@ -76,7 +77,15 @@ class GoogleDriveProvider:
             pending.chmod(0o600)
             self.run(["mkdir", self.remote], config=pending)
             os.replace(pending, self.config)
-            write_json(self.paths.state / "cloud.json", {"provider": self.name, "root": "AI-Memory", "oauth_client": "custom" if client_args else "shared"})
+            write_json(
+                self.paths.state / "cloud.json",
+                {
+                    "provider": self.name,
+                    "root": "AI-Memory",
+                    "oauth_client": "custom" if client_args else "shared",
+                    "connection_id": uuid.uuid4().hex,
+                },
+            )
         finally:
             pending.unlink(missing_ok=True)
 

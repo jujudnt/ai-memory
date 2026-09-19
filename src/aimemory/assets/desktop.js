@@ -65,6 +65,20 @@ const providerNotes = {
 };
 const icloud2faMessage =
   "Code demand\u00e9. Validez la demande Apple sur votre appareil, entrez le code ici, puis cliquez sur Confirmer le code iCloud.";
+function isIcloud2FAError(message = "") {
+  return /iCloud Drive attend|2FA|code de validation Apple|code Apple|two-factor|verification/i.test(
+    message,
+  );
+}
+function revealIcloud2FA() {
+  if ($("#provider").value !== "icloud-online") return;
+  icloudAwaiting2FA = true;
+  switchingCloud = true;
+  settings();
+  updateProviderFields();
+  notice(icloud2faMessage);
+  requestAnimationFrame(() => $("#icloud-2fa").focus());
+}
 function notice(message, error = false) {
   for (const selector of ["#message", "#settings-message"]) {
     const el = $(selector);
@@ -125,8 +139,11 @@ function render(data) {
   $("#settings-archive-size").textContent = size(storage.archive_bytes);
   $("#db-size").textContent = size(storage.database_bytes);
   $("#total-size").textContent = size(storage.total_bytes);
-  $("#cleanup-size").textContent = data.cleanup?.last_run_at
-    ? `${size(data.cleanup.freed_bytes)} lib\u00e9r\u00e9s ${elapsed(data.cleanup.last_run_at)}`
+  const retention = data.retention || {};
+  $("#cleanup-size").textContent = retention.last_run_at
+    ? `${size(retention.freed_bytes)} retir\u00e9s du Mac ${elapsed(retention.last_run_at)}`
+    : data.cleanup?.last_run_at
+      ? `${size(data.cleanup.freed_bytes)} lib\u00e9r\u00e9s ${elapsed(data.cleanup.last_run_at)}`
     : "En attente";
   $("#archive-path").textContent = storage.archive;
   $("#footer-size").textContent =
@@ -208,7 +225,7 @@ function render(data) {
     ? `${provider} \u00b7 ${storage.remote}`
     : "Aucune destination connect\u00e9e";
   $("#cloud-last").textContent =
-    `Derni\u00e8re sauvegarde compl\u00e8te : ${date(sync.last_success_at)}. ${sync.object_count || 0} objets v\u00e9rifi\u00e9s. Les copies locales et distantes sont conserv\u00e9es en cas de d\u00e9connexion.`;
+    `Derni\u00e8re sauvegarde compl\u00e8te : ${date(sync.last_success_at)}. ${sync.object_count || 0} objets v\u00e9rifi\u00e9s. Les originaux et anciennes versions confirm\u00e9s dans le cloud sont nettoy\u00e9s du Mac; les conversations courantes et l'index restent disponibles localement.`;
   const audit = data.audit || {};
   $("#audit-detail").textContent = audit.checked_at
     ? `${audit.verified_files}/${audit.files} sources v\u00e9rifi\u00e9es \u00b7 ${(audit.issues || []).length} erreurs \u00b7 ${(audit.changing_files || []).length} sources modifi\u00e9es depuis \u00b7 ${(audit.missing_thread_ids || []).length} conversations sans source. ${date(audit.checked_at)}.`
@@ -242,7 +259,14 @@ function render(data) {
       row.updated_at || row.created_at || "";
     list.append(item);
   }
-  if (data.job?.message && data.job.message !== lastJobMessage) {
+  if (
+    data.job?.error &&
+    $("#provider").value === "icloud-online" &&
+    isIcloud2FAError(data.job.message) &&
+    !icloudAwaiting2FA
+  ) {
+    revealIcloud2FA();
+  } else if (data.job?.message && data.job.message !== lastJobMessage) {
     lastJobMessage = data.job.message;
     notice(data.job.message, data.job.error);
   }
@@ -303,14 +327,9 @@ async function action(name, body = {}) {
     const wantsIcloudCode =
       name === "connect-cloud" &&
       $("#provider").value === "icloud-online" &&
-      /2FA|code de validation|code Apple|iCloud Drive attend|two-factor|verification/i.test(
-        error.message,
-      );
+      isIcloud2FAError(error.message);
     if (wantsIcloudCode) {
-      icloudAwaiting2FA = true;
-      updateProviderFields();
-      notice(icloud2faMessage);
-      $("#icloud-2fa").focus();
+      revealIcloud2FA();
     } else {
       notice(error.message, true);
     }

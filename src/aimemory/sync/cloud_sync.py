@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import gzip
+import json
 import os
 import re
 import shutil
@@ -8,11 +10,15 @@ import subprocess
 from pathlib import Path
 from filelock import FileLock
 
-from aimemory.cloud.google_drive import GoogleDriveProvider
+from aimemory.cloud.google_drive import rclone_binary
 from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, validate_sync_root
 from aimemory.cloud.rclone_provider import RcloneCloudProvider
 from aimemory.archive.raw_backup import RAW_PATTERN, read_raw
 from aimemory.state import atomic_write, now, read_json, write_json
+
+OBJECT_PATTERN = re.compile(
+    r"(?:snapshots/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json\.(?:gz|zst)|" + RAW_PATTERN + ")"
+)
 
 
 class CloudSync:
@@ -35,46 +41,45 @@ class CloudSync:
                 write_json(self.status_path, status)
             try:
                 progress("preparing")
-                # Only immutable objects cross devices, never SQLite or credentials.
-                exchange = self.paths.cache / "exchange"
-                exchange.mkdir(parents=True, exist_ok=True)
-                for category in ("snapshots", "raw"):
-                    for path in (self.paths.archive / category).rglob("*"):
-                        check_cancelled(self.paths)
-                        if path.is_file() and not path.name.startswith("."):
-                            target = exchange / path.relative_to(self.paths.archive)
-                            if not target.exists():
-                                atomic_write(target, path.read_bytes())
-                if config["provider"] == "google-drive":
-                    GoogleDriveProvider(self.paths).exchange(exchange, progress)
-                elif config["provider"] in RCLONE_DIRECT_PROVIDERS:
-                    RcloneCloudProvider.for_provider(self.paths, config["provider"]).exchange(exchange, progress)
-                elif config["provider"] in LOCAL_FOLDER_PROVIDERS:
-                    remote = Path(config["root"]).expanduser().resolve()
-                    validate_sync_root(remote, self.paths.home)
-                    for source, destination, phase in ((exchange, remote, "uploading"), (remote, exchange, "downloading")):
-                        progress(phase)
-                        _ensure_available_space(source, destination)
-                        for path in source.rglob("*"):
-                            check_cancelled(self.paths)
-                            if path.is_file() and not path.is_symlink() and not path.name.startswith("."):
-                                target = destination / path.relative_to(source)
-                                if not target.exists():
-                                    atomic_write(target, path.read_bytes())
-                else:
-                    raise ValueError("Unsupported storage provider")
-                progress("verifying")
+                remote = _remote_archive(self.paths, config)
                 known = read_json(self.paths.state / "synced-objects.json")
-                indexed = 0
-                for path in sorted(exchange.rglob("*")):
+                remote_identity = _remote_identity(config)
+                previous_identity = known.pop("__remote_identity__", None)
+                destination_changed = bool(previous_identity and previous_identity != remote_identity)
+                if destination_changed:
+                    known = {}
+                remote_objects = remote.list(progress)
+                known = {relative: True for relative in known if relative in remote_objects}
+                local_objects = list(
+                    _iter_local_objects(
+                        self.paths.archive,
+                        include_current_sources=destination_changed,
+                    )
+                )
+                uploads = [(relative, path) for relative, path in local_objects if relative not in remote_objects]
+                if uploads and config["provider"] in LOCAL_FOLDER_PROVIDERS:
+                    _ensure_available_space_for_files((path for _, path in uploads), remote.root)
+                for index, (relative, path) in enumerate(uploads, start=1):
                     check_cancelled(self.paths)
-                    if not path.is_file():
-                        continue
-                    relative = path.relative_to(exchange)
-                    if path.is_symlink() or not re.fullmatch(r"(?:snapshots/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json\.(?:gz|zst)|" + RAW_PATTERN + ")", relative.as_posix()):
+                    progress("uploading", object_count=len(remote_objects) + index, transfers=index, totalTransfers=len(uploads))
+                    remote.upload(path, relative)
+                    remote_objects.add(relative)
+                    known[relative] = True
+                if not uploads:
+                    progress("uploading", object_count=len(remote_objects))
+                progress("verifying")
+                indexed = 0
+                incoming = self.paths.cache / "incoming"
+                shutil.rmtree(incoming, ignore_errors=True)
+                downloads = sorted(path for path in remote_objects if path not in known)
+                for index, relative_string in enumerate(downloads, start=1):
+                    check_cancelled(self.paths)
+                    relative = Path(relative_string)
+                    if not _allowed_object(relative_string):
                         raise ValueError("Unexpected object in cloud archive")
-                    if relative.as_posix() in known:
-                        continue
+                    progress("downloading", object_count=len(known), transfers=index, totalTransfers=len(downloads))
+                    path = incoming / relative
+                    remote.download(relative_string, path)
                     payload = path.read_bytes()
                     if relative.parts[0] == "snapshots":
                         if hashlib.sha256(payload).hexdigest() != path.name.split(".")[0]:
@@ -90,23 +95,36 @@ class CloudSync:
                                 indexed += int(self.service.accept_conversation(conversation))
                     else:
                         try:
-                            read_raw(exchange, relative.as_posix())
-                        except ValueError:
+                            _hydrate_raw_dependencies(
+                                incoming,
+                                relative_string,
+                                remote,
+                                remote_objects,
+                            )
+                            read_raw(incoming, relative.as_posix())
+                        except (OSError, ValueError, KeyError, json.JSONDecodeError):
                             path.unlink()
                             raise ValueError("Raw cloud backup checksum mismatch. Retry synchronization.")
                     target = self.paths.archive / relative
                     if not target.exists():
                         atomic_write(target, payload)
-                    known[relative.as_posix()] = True
+                    known[relative_string] = True
                     if len(known) % 10 == 0:
                         progress("verifying", object_count=len(known))
+                for relative_string, _ in local_objects:
+                    if relative_string in remote_objects:
+                        known[relative_string] = True
+                known["__remote_identity__"] = remote_identity
                 write_json(self.paths.state / "synced-objects.json", known)
+                retention = prune_synced_local_copies(self.paths, known)
                 status.update(status="synced", last_success_at=now(), indexed=indexed,
-                              object_count=len(known), error=None)
+                              object_count=len(remote_objects), retention=retention, error=None)
             except Exception as exc:
                 status.update(status="error", error=str(exc), failed_at=now())
                 raise
             finally:
+                shutil.rmtree(self.paths.cache / "incoming", ignore_errors=True)
+                shutil.rmtree(self.paths.cache / "exchange", ignore_errors=True)
                 write_json(self.status_path, status)
             return status
 
@@ -162,3 +180,217 @@ def _ensure_available_space(source: Path, destination: Path) -> None:
             "Espace insuffisant sur la destination cloud locale. "
             "Libérez de l'espace ou choisissez une autre destination."
         )
+
+
+def _ensure_available_space_for_files(paths, destination: Path) -> None:
+    missing = sum(path.stat().st_size for path in paths if path.exists())
+    if not missing:
+        return
+    probe = destination
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    free = shutil.disk_usage(probe).free
+    reserve = max(100 * 1024 * 1024, missing // 20)
+    if free < missing + reserve:
+        raise RuntimeError(
+            "Espace insuffisant sur la destination cloud locale. "
+            "Libérez de l'espace ou choisissez une autre destination."
+        )
+
+
+def prune_synced_local_copies(paths, known: dict) -> dict:
+    removable_roots = ("raw/", "snapshots/")
+    freed = 0
+    removed: list[str] = []
+    for relative in sorted(path for path in known if path.startswith(removable_roots) and _allowed_object(path)):
+        target = paths.archive / relative
+        if not target.is_file():
+            continue
+        try:
+            size = target.stat().st_size
+            target.unlink()
+            freed += size
+            removed.append(relative)
+            _prune_empty_parents(target.parent, paths.archive)
+        except OSError:
+            continue
+    status = {
+        "last_run_at": now(),
+        "freed_bytes": freed,
+        "removed_count": len(removed),
+        "removed_raw_count": sum(1 for path in removed if path.startswith("raw/")),
+        "removed_revision_count": sum(1 for path in removed if path.startswith("snapshots/")),
+        "removed": removed[-20:],
+    }
+    write_json(paths.state / "retention-status.json", status)
+    return status
+
+
+def _prune_empty_parents(path: Path, stop: Path) -> None:
+    while path != stop and path.exists():
+        try:
+            path.rmdir()
+        except OSError:
+            return
+        path = path.parent
+
+
+def _iter_local_objects(archive: Path, include_current_sources: bool = False):
+    seen: set[str] = set()
+    for category in ("snapshots", "raw"):
+        for path in sorted((archive / category).rglob("*")):
+            if path.is_file() and not path.is_symlink() and not path.name.startswith("."):
+                relative = path.relative_to(archive).as_posix()
+                if not _allowed_object(relative):
+                    raise ValueError("Unexpected object in local archive")
+                seen.add(relative)
+                yield relative, path
+    if not include_current_sources:
+        return
+    for path in sorted((archive / "sources").rglob("*.json.*")):
+        if not path.is_file() or path.is_symlink() or path.name.startswith("."):
+            continue
+        suffix = ".json.zst" if path.name.endswith(".json.zst") else ".json.gz"
+        conversation_id = path.name.removesuffix(suffix)
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", conversation_id):
+            raise ValueError("Unexpected current conversation archive")
+        digest = _file_sha256(path)
+        relative = f"snapshots/{conversation_id}/{digest}{suffix}"
+        if relative not in seen:
+            seen.add(relative)
+            yield relative, path
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _hydrate_raw_dependencies(
+    incoming: Path,
+    relative: str,
+    remote,
+    remote_objects: set[str],
+) -> None:
+    seen: set[str] = set()
+    current = relative
+    while current.endswith(".delta.json.gz"):
+        if current in seen or not re.fullmatch(RAW_PATTERN, current):
+            raise ValueError("Invalid raw backup chain")
+        seen.add(current)
+        path = incoming / current
+        if not path.exists():
+            if current not in remote_objects:
+                raise ValueError("Raw backup dependency missing from cloud")
+            remote.download(current, path)
+        payload = json.loads(gzip.decompress(path.read_bytes()))
+        parent = Path(payload["parent"]).as_posix()
+        if not re.fullmatch(RAW_PATTERN, parent) or parent not in remote_objects:
+            raise ValueError("Raw backup dependency missing from cloud")
+        parent_path = incoming / parent
+        if not parent_path.exists():
+            remote.download(parent, parent_path)
+        current = parent
+
+
+def _allowed_object(relative: str) -> bool:
+    return bool(OBJECT_PATTERN.fullmatch(relative))
+
+
+def _remote_identity(config: dict) -> str:
+    if config.get("connection_id"):
+        return str(config["connection_id"])
+    stable = {key: config.get(key) for key in ("provider", "root", "remote", "oauth_client", "mode")}
+    return hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()
+
+
+def _remote_archive(paths, config: dict):
+    provider = config["provider"]
+    if provider == "google-drive":
+        return RcloneArchiveRemote(paths, "google-drive", "aimemory:AI-Memory")
+    if provider in RCLONE_DIRECT_PROVIDERS:
+        rclone = RcloneCloudProvider.for_provider(paths, provider)
+        return RcloneArchiveRemote(paths, provider, rclone.spec.remote)
+    if provider in LOCAL_FOLDER_PROVIDERS:
+        root = Path(config["root"]).expanduser().resolve()
+        validate_sync_root(root, paths.home)
+        return LocalArchiveRemote(root)
+    raise ValueError("Unsupported storage provider")
+
+
+class LocalArchiveRemote:
+    def __init__(self, root: Path):
+        self.root = root
+
+    def list(self, progress) -> set[str]:
+        self.root.mkdir(parents=True, exist_ok=True)
+        result: set[str] = set()
+        for path in self.root.rglob("*"):
+            check_cancelled_path = path
+            if check_cancelled_path.is_file() and not check_cancelled_path.is_symlink() and not check_cancelled_path.name.startswith("."):
+                relative = check_cancelled_path.relative_to(self.root).as_posix()
+                if _allowed_object(relative):
+                    result.add(relative)
+        progress("preparing", object_count=len(result))
+        return result
+
+    def upload(self, local_path: Path, relative: str) -> None:
+        target = self.root / relative
+        if not target.exists():
+            atomic_write(target, local_path.read_bytes())
+
+    def download(self, relative: str, local_path: Path) -> None:
+        atomic_write(local_path, (self.root / relative).read_bytes())
+
+
+class RcloneArchiveRemote:
+    def __init__(self, paths, provider: str, remote: str):
+        self.paths = paths
+        self.provider = provider
+        self.remote = remote
+        self.config = paths.home / "credentials" / "rclone.conf"
+
+    def list(self, progress) -> set[str]:
+        output = self._run(["lsf", self.remote, "--recursive", "--files-only"], timeout=600)
+        objects = {line.strip() for line in output.splitlines() if _allowed_object(line.strip())}
+        progress("preparing", object_count=len(objects))
+        return objects
+
+    def upload(self, local_path: Path, relative: str) -> None:
+        self._run(["copyto", str(local_path), f"{self.remote}/{relative}"], timeout=600)
+
+    def download(self, relative: str, local_path: Path) -> None:
+        self._run(["copyto", f"{self.remote}/{relative}", str(local_path)], timeout=600)
+
+    def _run(self, args: list[str], timeout: int) -> str:
+        result = subprocess.run(
+            [
+                rclone_binary(),
+                "--config",
+                str(self.config),
+                "--contimeout",
+                "15s",
+                "--timeout",
+                "60s",
+                "--retries",
+                "2",
+                *args,
+            ],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        if result.returncode:
+            if self.provider == "google-drive":
+                from aimemory.cloud.google_drive import _friendly_google_error
+
+                raise RuntimeError(_friendly_google_error(result.stderr, result.returncode))
+            from aimemory.cloud.rclone_provider import _friendly_rclone_error
+
+            raise RuntimeError(_friendly_rclone_error(self.provider, result.stderr, result.returncode))
+        return result.stdout
