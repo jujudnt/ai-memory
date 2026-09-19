@@ -139,6 +139,30 @@ def test_claude_adapter_imports_jsonl_project_session(tmp_path):
     assert [message.role for message in conversation.messages] == ["user", "assistant"]
 
 
+def test_claude_adapter_labels_vscode_entrypoint(tmp_path):
+    claude_home = tmp_path / "claude"
+    session = claude_home / "projects" / "-tmp-project" / "claude-vscode-session.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "sessionId": "claude-vscode-session",
+                "timestamp": "2026-09-18T10:00:00Z",
+                "cwd": "/tmp/project",
+                "entrypoint": "claude-vscode",
+                "message": {"role": "user", "content": "Session depuis VS Code"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    conversation = ClaudeAdapter(claude_home=claude_home).parse_session(session)
+
+    assert conversation.source == "vscode-claude"
+    assert conversation.metadata["claude_entrypoint"] == "claude-vscode"
+
+
 def test_vscode_adapter_imports_non_empty_chat_session(tmp_path):
     code_user = tmp_path / "Code" / "User"
     session = code_user / "workspaceStorage" / "abc" / "chatSessions" / "vscode-session.jsonl"

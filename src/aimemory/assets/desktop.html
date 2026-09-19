@@ -122,7 +122,7 @@
       </section>
       <footer>
         <span><span class="tiny-dot"></span> Stockage local</span
-        ><span id="footer-size"></span><span>v0.4.0</span>
+        ><span id="footer-size"></span><span>v0.4.1</span>
       </footer>
     </main>
     <dialog id="settings" aria-labelledby="settings-title">
@@ -207,11 +207,18 @@
                   placeholder="nom@icloud.com"
               /></label>
               <label
-                >Mot de passe<input
+                >Mot de passe sp&eacute;cifique d'app Apple<input
                   id="icloud-password"
                   type="password"
                   autocomplete="current-password"
               /></label>
+              <p class="muted small">
+                Apple ID avec double authentification : cr&eacute;ez un mot de
+                passe sp&eacute;cifique d'app sur appleid.apple.com, puis
+                collez-le ici. Pour utiliser le compte iCloud d&eacute;j&agrave;
+                connect&eacute; &agrave; macOS, choisissez plut&ocirc;t
+                iCloud Drive du Mac.
+              </p>
             </div>
             <label id="folder-label" hidden
               >Chemin du dossier<input

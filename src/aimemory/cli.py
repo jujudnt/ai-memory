@@ -21,7 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("audit", help="Verify raw backups and normalized conversations against Codex.")
     sub.add_parser("sync", help="Synchronize the configured cloud provider.")
 
-    sub.add_parser("import-all", help="Import Codex, Claude, and VS Code conversations.")
+    import_all_parser = sub.add_parser("import-all", help="Import Codex, Claude, and VS Code conversations.")
+    import_all_parser.add_argument("--force", action="store_true")
 
     import_parser = sub.add_parser("import-codex", help="Import Codex JSONL sessions.")
     import_parser.add_argument("--codex-home", type=Path, default=None)
@@ -93,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "import-all":
-        result = service.import_all()
+        result = service.import_all(force=args.force)
         print(json.dumps(asdict(result), indent=2, sort_keys=True))
         return 0
 

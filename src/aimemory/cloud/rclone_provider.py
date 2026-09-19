@@ -69,7 +69,7 @@ class RcloneCloudProvider:
             raise RuntimeError(f"{provider_label(self.spec.provider)} n'a pas répondu. Réessayez.") from None
         if result.returncode:
             if args[0] == "config":
-                raise RuntimeError(f"Connexion {provider_label(self.spec.provider)} annulée ou refusée.")
+                raise RuntimeError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode))
             raise RuntimeError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode))
         return result.stdout
 
@@ -194,10 +194,20 @@ def _friendly_rclone_error(provider: str, output: str | bytes | None, code: int)
     text = (output or "").decode("utf-8", "ignore") if isinstance(output, bytes) else (output or "")
     lowered = text.lower()
     name = provider_label(provider)
+    if provider == "icloud-online":
+        if any(marker in lowered for marker in ("2fa", "two-factor", "verification", "mfa", "app-specific", "password", "auth", "unauthorized", "forbidden")):
+            return (
+                "iCloud Drive en ligne a refusé la connexion. Avec la double authentification Apple, "
+                "utilisez un mot de passe spécifique d'app créé sur appleid.apple.com, ou choisissez "
+                "iCloud Drive du Mac pour utiliser le compte iCloud déjà connecté à macOS."
+            )
     if any(marker in lowered for marker in ("insufficient storage", "not enough space", "quota", "storage full", "drive is full")):
         return f"{name} est plein. Libérez de l'espace ou changez de destination cloud."
     if any(marker in lowered for marker in ("unauthorized", "invalid_grant", "access denied", "forbidden", "authentication", "auth")):
         return f"Connexion {name} refusée ou expirée. Reconnectez ce compte."
-    if provider == "icloud-online" and any(marker in lowered for marker in ("2fa", "two-factor", "verification", "mfa")):
-        return "iCloud demande une vérification à deux facteurs. Validez la connexion Apple puis réessayez."
+    if provider == "icloud-online":
+        return (
+            "Connexion iCloud Drive en ligne impossible. Si votre Apple ID utilise la double authentification, "
+            "créez un mot de passe spécifique d'app Apple, puis réessayez. Sinon utilisez iCloud Drive du Mac."
+        )
     return f"{name} a échoué (code {code}). Vérifiez la connexion puis relancez."

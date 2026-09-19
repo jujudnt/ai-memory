@@ -21,7 +21,7 @@ from aimemory.projects import identify_project
 
 class ClaudeAdapter:
     source = "claude"
-    parser_version = 1
+    parser_version = 2
 
     def __init__(self, claude_home: Path | None = None, device_id: str | None = None):
         self.claude_home = claude_home or Path("~/.claude").expanduser()
@@ -52,6 +52,7 @@ class ClaudeAdapter:
         cwd = None
         git_branch = None
         model = None
+        entrypoint = None
 
         for ordinal, record in enumerate(records):
             if isinstance(record.get("sessionId"), str):
@@ -59,6 +60,7 @@ class ClaudeAdapter:
             cwd = cwd or record.get("cwd")
             git_branch = git_branch or record.get("gitBranch")
             model = model or record.get("model")
+            entrypoint = entrypoint or record.get("entrypoint")
             message = record.get("message") if isinstance(record.get("message"), dict) else {}
             role = message.get("role") or record.get("type")
             if role not in {"user", "assistant", "system", "tool"}:
@@ -95,10 +97,11 @@ class ClaudeAdapter:
                 if name == "Bash" and isinstance(item.get("input"), dict) and isinstance(item["input"].get("command"), str):
                     commands.append(item["input"]["command"])
 
+        actual_source = "vscode-claude" if entrypoint == "claude-vscode" else self.source
         return NormalizedConversation(
             schema_version=1,
             id=conversation_id(self.source, source_session_id),
-            source=self.source,
+            source=actual_source,
             source_session_id=source_session_id,
             created_at=first_timestamp(records),
             updated_at=last_timestamp(records) or first_timestamp(records),
@@ -114,6 +117,7 @@ class ClaudeAdapter:
                 "source_path": str(path),
                 "raw_record_count": len(records),
                 "parser_version": self.parser_version,
+                "claude_entrypoint": entrypoint,
             },
         )
 

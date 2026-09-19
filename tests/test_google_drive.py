@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from aimemory.cloud.google_drive import GoogleDriveProvider, _friendly_google_error, rclone_binary
+from aimemory.cloud.rclone_provider import _friendly_rclone_error
 from aimemory.config import AppPaths
 from aimemory.state import read_json
 
@@ -60,3 +61,10 @@ def test_google_quota_errors_are_actionable():
 
     assert "Google Drive est plein" in message
     assert "iCloud" in message
+
+
+def test_icloud_auth_errors_explain_app_specific_password():
+    message = _friendly_rclone_error("icloud-online", "unauthorized: two-factor verification required", 1)
+
+    assert "mot de passe spécifique d'app" in message
+    assert "iCloud Drive du Mac" in message

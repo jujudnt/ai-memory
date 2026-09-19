@@ -52,7 +52,7 @@ const providerNotes = {
   "onedrive-online":
     "Connexion directe OneDrive via rclone. Choisissez personnel ou professionnel selon le compte \u00e0 connecter.",
   "icloud-online":
-    "Connexion directe iCloud via rclone, ind\u00e9pendante de l'iCloud local du Mac. Les identifiants restent dans la configuration rclone priv\u00e9e de AI Memory.",
+    "Connexion directe iCloud via rclone, ind\u00e9pendante de l'iCloud local du Mac. Avec la double authentification Apple, utilisez un mot de passe sp\u00e9cifique d'app. Sinon choisissez iCloud Drive du Mac.",
   "icloud-drive":
     "Sauvegarde dans l'iCloud Drive d\u00e9j\u00e0 connect\u00e9 \u00e0 cette session macOS.",
   onedrive:
@@ -331,6 +331,8 @@ function sourceName(source) {
       codex: "Codex",
       claude: "Claude",
       vscode: "VS Code",
+      "vscode-codex": "Codex VS Code",
+      "vscode-claude": "Claude VS Code",
     }[source] || source
   );
 }

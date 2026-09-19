@@ -37,6 +37,8 @@ V0.3.2 adds iCloud Drive, OneDrive, Dropbox and custom synchronized-folder desti
 
 V0.3.3 lets the desktop UI change or disconnect the cloud destination while a transfer is running by cancelling the active transfer first, instead of surfacing a lock-file error.
 
+V0.4.1 separates Codex and Claude sessions launched from VS Code in the local index, while preserving their canonical archive IDs. It also improves iCloud Drive online setup guidance for Apple double authentication and app-specific passwords.
+
 ## macOS Gatekeeper
 
 The macOS build is ad-hoc signed, but it is not notarized with an Apple Developer ID yet. macOS may still show an unidentified developer or malware-verification warning after download.

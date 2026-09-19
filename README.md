@@ -8,6 +8,7 @@ This repository intentionally starts with the data-safe core:
 
 - Codex session discovery from `~/.codex/sessions` and `~/.codex/archived_sessions`
 - Claude session discovery from `~/.claude/projects`
+- Separate labels for Codex and Claude sessions launched from VS Code when their local metadata exposes it
 - VS Code chat-session discovery when non-empty chat history exists under Code user storage
 - Stable normalized JSON archives under `archive/sources/<source>/sessions`
 - Local SQLite metadata plus FTS5 search under `db/memory.sqlite`
@@ -30,7 +31,7 @@ For the release application:
 
 1. Extract the zip. On macOS, move `AI Memory.app` to Applications before installing the watcher or enabling MCP.
 2. Open the app and click **Activer** beside the collector. Historical sessions are imported automatically; the collector continues after the UI closes.
-3. Click **Connecter**, then choose **Google Drive**, **Dropbox**, **OneDrive**, **iCloud Drive** or a local-folder option. Google Drive, Dropbox and OneDrive open a browser authorization under the name **rclone** and create the `AI-Memory` folder. iCloud Drive online uses rclone credentials, separate from the iCloud account signed in to macOS. The “du Mac” options use the official local sync folder already installed on the Mac.
+3. Click **Connecter**, then choose **Google Drive**, **Dropbox**, **OneDrive**, **iCloud Drive** or a local-folder option. Google Drive, Dropbox and OneDrive open a browser authorization under the name **rclone** and create the `AI-Memory` folder. iCloud Drive online uses rclone credentials, separate from the iCloud account signed in to macOS; with Apple double authentication, use an app-specific password from appleid.apple.com. The “du Mac” options use the official local sync folder already installed on the Mac.
 4. Open **Reglages** (the settings icon), activate **MCP pour Codex**, and restart the Codex client so it reads its updated configuration.
 5. Under **Verification et diagnostics**, use **Verifier les copies** to compare original Codex files with raw backups and normalized messages/tool calls. Active sessions can change during the check and are reported separately.
 

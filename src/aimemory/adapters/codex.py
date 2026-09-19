@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import sqlite3
 import socket
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +18,11 @@ from aimemory.projects import identify_project
 
 class CodexAdapter:
     source = "codex"
+    parser_version = 3
 
     def __init__(self, codex_home: Path | None = None, device_id: str | None = None):
         self.codex_home = codex_home or default_codex_home()
+        self.thread_metadata = _load_thread_metadata(self.codex_home)
         self.device = DeviceIdentity(
             id=device_id or _stable_device_id(),
             name=socket.gethostname() or platform.node() or "unknown-device",
@@ -145,20 +149,22 @@ class CodexAdapter:
             or session_meta.get("session_id")
             or _session_id_from_path(path)
         )
-        created_at = session_meta.get("timestamp") or _first_timestamp(records)
-        updated_at = _last_timestamp(records) or created_at
-        cwd = turn_context.get("cwd") or session_meta.get("cwd")
+        thread_meta = self.thread_metadata.get(source_session_id) or self.thread_metadata.get(str(path)) or {}
+        created_at = session_meta.get("timestamp") or _timestamp(thread_meta.get("created_at")) or _first_timestamp(records)
+        updated_at = _last_timestamp(records) or _timestamp(thread_meta.get("updated_at")) or created_at
+        cwd = turn_context.get("cwd") or session_meta.get("cwd") or thread_meta.get("cwd")
         git = session_meta.get("git") if isinstance(session_meta.get("git"), dict) else {}
         git_remote = git.get("remote_url") or git.get("remote") or git.get("repository_url")
         git_branch = git.get("branch") or turn_context.get("git_branch")
         project = identify_project(cwd, git_remote, git_branch)
-        model = turn_context.get("model") or session_meta.get("model") or session_meta.get("model_provider")
-        title = _title_from_messages(messages)
+        model = turn_context.get("model") or session_meta.get("model") or session_meta.get("model_provider") or thread_meta.get("model_provider")
+        title = _title_from_messages(messages) or thread_meta.get("title")
+        actual_source = "vscode-codex" if thread_meta.get("source") == "vscode" else self.source
 
         return NormalizedConversation(
             schema_version=1,
             id=_conversation_id(self.source, source_session_id),
-            source=self.source,
+            source=actual_source,
             source_session_id=source_session_id,
             created_at=created_at,
             updated_at=updated_at,
@@ -175,7 +181,8 @@ class CodexAdapter:
                 "raw_record_count": len(records),
                 "codex_cli_version": session_meta.get("cli_version"),
                 "history_mode": session_meta.get("history_mode"),
-                "parser_version": 2,
+                "parser_version": self.parser_version,
+                "codex_thread_source": thread_meta.get("source"),
                 "session_metadata": session_meta,
             },
         )
@@ -214,6 +221,41 @@ def _session_id_from_path(path: Path) -> str:
 def _conversation_id(source: str, source_session_id: str) -> str:
     digest = hashlib.sha256(f"{source}:{source_session_id}".encode("utf-8")).hexdigest()
     return str(uuid.UUID(digest[:32]))
+
+
+def _load_thread_metadata(codex_home: Path) -> dict[str, dict[str, Any]]:
+    db_path = codex_home / "state_5.sqlite"
+    if not db_path.exists():
+        return {}
+    conn = None
+    try:
+        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, rollout_path, source, model_provider, cwd, title, created_at, updated_at FROM threads"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        data = dict(row)
+        if data.get("id"):
+            result[str(data["id"])] = data
+        if data.get("rollout_path"):
+            result[str(data["rollout_path"])] = data
+    return result
+
+
+def _timestamp(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and value > 0:
+        seconds = value / 1000 if value > 10_000_000_000 else value
+        return datetime.fromtimestamp(seconds, UTC).isoformat()
+    return None
 
 
 def _first_timestamp(records: list[dict[str, Any]]) -> str | None:
