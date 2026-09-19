@@ -16,10 +16,14 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from aimemory.installer import (
+    claude_desktop_available,
+    claude_desktop_config_path,
     get_watcher_service_status,
-    install_mcp_config,
+    install_all_mcp_configs,
     install_watcher_service,
+    mcp_json_server,
     resolve_aimemory_command,
+    vscode_user_mcp_config_path,
 )
 from aimemory.service import MemoryService
 from aimemory.cloud.google_drive import GoogleDriveProvider
@@ -72,7 +76,8 @@ class Handler(BaseHTTPRequestHandler):
             status["watcher_service"] = asdict(get_watcher_service_status())
             status["job"] = self.state.job
             status["health"] = watcher_health(status["watcher"])
-            status["mcp_configured"] = mcp_configured()
+            status["mcp_clients"] = mcp_client_status()
+            status["mcp_configured"] = mcp_configured(status["mcp_clients"])
             status["menubar_available"] = sys.platform == "darwin"
             from aimemory.menubar import login_path
             status["menubar_login"] = sys.platform == "darwin" and login_path().exists()
@@ -213,8 +218,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"message": message, "result": asdict(result)})
             return
         if self.path == "/api/install-mcp":
-            result = install_mcp_config()
-            self._send_json({"message": "MCP configure. Relancez Codex pour charger la connexion.", "result": asdict(result)})
+            result = install_all_mcp_configs()
+            self._send_json({"message": "MCP configure. Relancez Codex et Claude Desktop pour charger la connexion.", "result": asdict(result)})
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -238,12 +243,70 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def mcp_configured() -> bool:
+def mcp_configured(clients: dict | None = None) -> bool:
+    clients = clients or mcp_client_status()
+    available = [client for client in clients.values() if client.get("available")]
+    return bool(available) and all(client.get("configured") for client in available)
+
+
+def mcp_client_status() -> dict:
+    vscode_path = vscode_user_mcp_config_path()
+    return {
+        "codex": {
+            "label": "Codex",
+            "available": True,
+            "configured": codex_mcp_configured(),
+        },
+        "claudeDesktop": {
+            "label": "Claude Desktop",
+            "available": claude_desktop_available(),
+            "configured": claude_desktop_mcp_configured(),
+        },
+        "vscode": {
+            "label": "VS Code",
+            "available": vscode_path is not None,
+            "configured": vscode_mcp_configured(vscode_path),
+        },
+    }
+
+
+def codex_mcp_configured() -> bool:
     try:
         config = tomllib.loads(Path("~/.codex/config.toml").expanduser().read_text(encoding="utf-8"))
         server = config.get("mcp_servers", {}).get("ai-memory", {})
         return bool(server.get("command")) and server.get("enabled", True)
     except (OSError, ValueError):
+        return False
+
+
+def claude_desktop_mcp_configured() -> bool:
+    try:
+        config = json.loads(claude_desktop_config_path().read_text(encoding="utf-8"))
+        server = config.get("mcpServers", {}).get("ai-memory", {})
+        expected = mcp_json_server()
+        return (
+            bool(server.get("command"))
+            and server.get("command") == expected.get("command")
+            and server.get("args", []) == expected.get("args", [])
+        )
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def vscode_mcp_configured(config_path: Path | None = None) -> bool:
+    try:
+        path = config_path or vscode_user_mcp_config_path()
+        if not path:
+            return False
+        config = json.loads(path.read_text(encoding="utf-8"))
+        server = config.get("servers", {}).get("ai-memory", {})
+        expected = mcp_json_server()
+        return (
+            bool(server.get("command"))
+            and server.get("command") == expected.get("command")
+            and server.get("args", []) == expected.get("args", [])
+        )
+    except (OSError, ValueError, TypeError):
         return False
 
 

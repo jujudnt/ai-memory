@@ -41,6 +41,8 @@ V0.4.1 separates Codex and Claude sessions launched from VS Code in the local in
 
 V0.4.2 adds the missing iCloud Drive 2FA input field and passes rclone's `config_2fa` value during online iCloud setup. It also clarifies that iCloud Drive requires the normal Apple ID password plus 2FA, not an app-specific password.
 
+V0.4.3 turns iCloud Drive online setup into a two-step Apple 2FA flow, installs the same local MCP server for detected Codex, Claude Desktop and VS Code clients, documents the release-app MCP setup path, labels Claude Desktop/VS Code sources separately, and maps Codex/Claude conversations back to local project folders when the source exposes them.
+
 ## macOS Gatekeeper
 
 The macOS build is ad-hoc signed, but it is not notarized with an Apple Developer ID yet. macOS may still show an unidentified developer or malware-verification warning after download.

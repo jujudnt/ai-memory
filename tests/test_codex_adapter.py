@@ -85,6 +85,72 @@ def test_codex_adapter_parses_enveloped_records(tmp_path):
     assert conversation.tool_calls[0].output == "1 passed"
 
 
+def test_codex_adapter_prefers_codex_sidebar_project_root(tmp_path):
+    codex_home = tmp_path / ".codex"
+    session = codex_home / "sessions" / "rollout-project.jsonl"
+    write_jsonl(
+        session,
+        [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "session_id": "project-session",
+                    "timestamp": "2026-09-18T00:00:00Z",
+                },
+            },
+            {"type": "turn_context", "payload": {"cwd": "/Users/julia/Documents/Perso/ai-memory"}},
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": "hello",
+                },
+            },
+        ],
+    )
+    db_path = codex_home / "state_5.sqlite"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT,
+                source TEXT,
+                model_provider TEXT,
+                cwd TEXT,
+                title TEXT,
+                created_at INTEGER,
+                updated_at INTEGER,
+                project_id TEXT
+            );
+            CREATE TABLE projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE TABLE project_roots (
+                project_id TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                path TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute("INSERT INTO projects(id, name) VALUES (?, ?)", ("project-perso", "Perso"))
+        conn.execute(
+            "INSERT INTO project_roots(project_id, position, path) VALUES (?, ?, ?)",
+            ("project-perso", 0, "/Users/julia/Documents/Perso"),
+        )
+
+    conversation = CodexAdapter(codex_home, device_id="device-1").parse_session(session)
+
+    assert conversation.project is not None
+    assert conversation.project.id == "codex_project_project-perso"
+    assert conversation.project.name == "Perso"
+    assert conversation.metadata["codex_project"]["name"] == "Perso"
+    assert conversation.metadata["code_project"]["name"] == "ai-memory"
+
+
 def test_codex_adapter_labels_vscode_threads_from_state_database(tmp_path):
     codex_home = tmp_path / ".codex"
     session = codex_home / "sessions" / "rollout-vscode-session.jsonl"

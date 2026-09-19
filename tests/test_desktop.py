@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from filelock import FileLock
 
-from aimemory.desktop import DesktopState, Handler, mcp_configured
+from aimemory.desktop import DesktopState, Handler, codex_mcp_configured, mcp_configured
 from aimemory.health import watcher_health
 from aimemory.installer import WatcherServiceStatus
 from aimemory.menubar import ensure_login, login_path, set_login_enabled
@@ -60,16 +60,18 @@ def test_development_does_not_register_login(tmp_path, monkeypatch):
     assert not login_path().exists()
 
 
-def test_mcp_status_does_not_claim_a_disabled_server_is_ready(tmp_path, monkeypatch):
+def test_codex_mcp_status_does_not_claim_a_disabled_server_is_ready(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("PATH", "")
     config = tmp_path / ".codex" / "config.toml"
     config.parent.mkdir()
     config.write_text('[mcp_servers.ai-memory]\ncommand="test"\nenabled=false\n')
-    assert not mcp_configured()
+    assert not codex_mcp_configured()
     config.write_text('[mcp_servers.ai-memory]\ncommand="test"\n')
-    assert mcp_configured()
+    assert codex_mcp_configured()
+    assert mcp_configured({"codex": {"available": True, "configured": True}})
 
 
 @pytest.fixture
@@ -113,3 +115,14 @@ def test_desktop_assets_status_and_request_guards(desktop_server):
     assert response.status == 404
     response.read()
     client.close()
+
+
+def test_desktop_assets_explain_multi_client_mcp_and_two_step_icloud():
+    html = Path("src/aimemory/assets/desktop.html").read_text(encoding="utf-8")
+    script = Path("src/aimemory/assets/desktop.js").read_text(encoding="utf-8")
+
+    assert "MCP pour Codex et Claude" in html
+    assert 'id="icloud-2fa-label"' in html
+    assert "icloudAwaiting2FA" in script
+    assert "Confirmer le code iCloud" in script
+    assert "VS Code" in script

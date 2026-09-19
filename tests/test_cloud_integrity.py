@@ -119,7 +119,7 @@ def test_legacy_inherited_session_id_cannot_replace_repaired_archive(tmp_path):
         write_json(service.paths.state / "cloud.json", {"provider": "local-folder", "root": str(tmp_path / "remote")})
     a.sync_now()
     b.sync_now()
-    assert b.get_conversation(current.id).metadata["parser_version"] == 3
+    assert b.get_conversation(current.id).metadata["parser_version"] == 4
 
 
 def test_cloud_transfer_does_not_block_local_import(tmp_path, monkeypatch):

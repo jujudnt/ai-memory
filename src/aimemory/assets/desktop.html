@@ -122,7 +122,7 @@
       </section>
       <footer>
         <span><span class="tiny-dot"></span> Stockage local</span
-        ><span id="footer-size"></span><span>v0.4.2</span>
+        ><span id="footer-size"></span><span>v0.4.3</span>
       </footer>
     </main>
     <dialog id="settings" aria-labelledby="settings-title">
@@ -142,7 +142,7 @@
           <h3>Connexions</h3>
           <div class="setting-row">
             <div>
-              <b>MCP pour Codex</b>
+              <b>MCP pour Codex et Claude</b>
               <p id="mcp-status">Lecture&hellip;</p>
             </div>
             <button class="compact" data-action="install-mcp" id="mcp-enable">
@@ -213,6 +213,8 @@
                   autocomplete="current-password"
               /></label>
               <label
+                id="icloud-2fa-label"
+                hidden
                 >Code 2FA Apple<input
                   id="icloud-2fa"
                   inputmode="numeric"
@@ -220,11 +222,11 @@
                   placeholder="123456"
               /></label>
               <p class="muted small">
-                Apple ID avec double authentification : lancez la connexion,
-                validez la demande sur votre iPhone, puis saisissez ici le code
-                affich&eacute; et reconnectez. Les mots de passe
-                sp&eacute;cifiques d'app ne sont pas accept&eacute;s par iCloud
-                Drive. Pour utiliser le compte iCloud d&eacute;j&agrave;
+                &Eacute;tape 1 : saisissez Apple ID et mot de passe, puis
+                connectez. &Eacute;tape 2 : quand Apple affiche le code sur
+                votre appareil, AI Memory montre le champ de confirmation. Les
+                mots de passe sp&eacute;cifiques d'app ne sont pas accept&eacute;s
+                par iCloud Drive. Pour utiliser le compte iCloud d&eacute;j&agrave;
                 connect&eacute; &agrave; macOS, choisissez iCloud Drive du Mac.
               </p>
             </div>

@@ -6,23 +6,25 @@ import platform
 import sqlite3
 import socket
 import uuid
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from aimemory.adapters.base import DiscoveredSource, SourceSession
 from aimemory.config import default_codex_home
-from aimemory.models import DeviceIdentity, Message, NormalizedConversation, ToolCall
+from aimemory.models import DeviceIdentity, Message, NormalizedConversation, ProjectIdentity, ToolCall
 from aimemory.projects import identify_project
 
 
 class CodexAdapter:
     source = "codex"
-    parser_version = 3
+    parser_version = 4
 
     def __init__(self, codex_home: Path | None = None, device_id: str | None = None):
         self.codex_home = codex_home or default_codex_home()
         self.thread_metadata = _load_thread_metadata(self.codex_home)
+        self.codex_projects = _load_codex_projects(self.codex_home)
         self.device = DeviceIdentity(
             id=device_id or _stable_device_id(),
             name=socket.gethostname() or platform.node() or "unknown-device",
@@ -156,7 +158,9 @@ class CodexAdapter:
         git = session_meta.get("git") if isinstance(session_meta.get("git"), dict) else {}
         git_remote = git.get("remote_url") or git.get("remote") or git.get("repository_url")
         git_branch = git.get("branch") or turn_context.get("git_branch")
-        project = identify_project(cwd, git_remote, git_branch)
+        code_project = identify_project(cwd, git_remote, git_branch)
+        codex_project = _identify_codex_project(cwd, thread_meta.get("project_id"), self.codex_projects)
+        project = codex_project or code_project
         model = turn_context.get("model") or session_meta.get("model") or session_meta.get("model_provider") or thread_meta.get("model_provider")
         title = _title_from_messages(messages) or thread_meta.get("title")
         actual_source = "vscode-codex" if thread_meta.get("source") == "vscode" else self.source
@@ -183,6 +187,8 @@ class CodexAdapter:
                 "history_mode": session_meta.get("history_mode"),
                 "parser_version": self.parser_version,
                 "codex_thread_source": thread_meta.get("source"),
+                "codex_project": asdict(codex_project) if codex_project else None,
+                "code_project": asdict(code_project) if code_project else None,
                 "session_metadata": session_meta,
             },
         )
@@ -231,8 +237,24 @@ def _load_thread_metadata(codex_home: Path) -> dict[str, dict[str, Any]]:
     try:
         conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(threads)").fetchall()
+        }
+        desired = [
+            "id",
+            "rollout_path",
+            "source",
+            "model_provider",
+            "cwd",
+            "title",
+            "created_at",
+            "updated_at",
+            "project_id",
+        ]
+        select_columns = [column for column in desired if column in columns]
         rows = conn.execute(
-            "SELECT id, rollout_path, source, model_provider, cwd, title, created_at, updated_at FROM threads"
+            f"SELECT {', '.join(select_columns)} FROM threads"
         ).fetchall()
     except sqlite3.Error:
         return {}
@@ -247,6 +269,74 @@ def _load_thread_metadata(codex_home: Path) -> dict[str, dict[str, Any]]:
         if data.get("rollout_path"):
             result[str(data["rollout_path"])] = data
     return result
+
+
+def _load_codex_projects(codex_home: Path) -> dict[str, dict[str, Any]]:
+    db_path = codex_home / "state_5.sqlite"
+    if not db_path.exists():
+        return {}
+    conn = None
+    try:
+        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        project_rows = conn.execute("SELECT id, name, metadata FROM projects").fetchall()
+        root_rows = conn.execute("SELECT project_id, path FROM project_roots ORDER BY position").fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
+
+    projects: dict[str, dict[str, Any]] = {
+        str(row["id"]): {"id": str(row["id"]), "name": str(row["name"]), "metadata": row["metadata"], "roots": []}
+        for row in project_rows
+    }
+    for row in root_rows:
+        project = projects.get(str(row["project_id"]))
+        if project and isinstance(row["path"], str):
+            project["roots"].append(row["path"])
+    return projects
+
+
+def _identify_codex_project(
+    cwd: str | None,
+    project_id: Any,
+    projects: dict[str, dict[str, Any]],
+) -> ProjectIdentity | None:
+    if project_id and str(project_id) in projects:
+        return _codex_project_identity(projects[str(project_id)])
+    if not cwd:
+        return None
+    try:
+        cwd_path = Path(cwd).expanduser().resolve()
+    except OSError:
+        cwd_path = Path(cwd).expanduser()
+    best: tuple[int, dict[str, Any], str] | None = None
+    for project in projects.values():
+        for root in project.get("roots", []):
+            try:
+                root_path = Path(root).expanduser().resolve()
+            except OSError:
+                root_path = Path(root).expanduser()
+            if cwd_path == root_path or root_path in cwd_path.parents:
+                length = len(str(root_path))
+                if best is None or length > best[0]:
+                    best = (length, project, str(root_path))
+    if best:
+        return _codex_project_identity(best[1], root=best[2])
+    return None
+
+
+def _codex_project_identity(project: dict[str, Any], root: str | None = None) -> ProjectIdentity:
+    roots = project.get("roots") if isinstance(project.get("roots"), list) else []
+    cwd = root or (roots[0] if roots else None)
+    return ProjectIdentity(
+        id=f"codex_project_{project['id']}",
+        name=str(project["name"]),
+        cwd=cwd,
+        git_remote=None,
+        git_branch=None,
+    )
 
 
 def _timestamp(value: Any) -> str | None:

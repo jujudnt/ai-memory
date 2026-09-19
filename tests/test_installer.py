@@ -1,12 +1,16 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 from aimemory.installer import (
     InstallResult,
     WatcherServiceStatus,
+    install_claude_desktop_mcp_config,
+    install_vscode_mcp_config,
     install_mcp_config,
     install_watcher_service,
     mcp_toml_block,
+    mcp_json_server,
     resolve_mcp_command,
 )
 from aimemory.service import MemoryService
@@ -40,6 +44,34 @@ value = true
     assert text.count("[mcp_servers.ai-memory]") == 1
     assert 'command = "old"' not in text
     assert "[other]" in text
+
+
+def test_install_claude_desktop_config_preserves_other_servers(tmp_path: Path):
+    config = tmp_path / "claude_desktop_config.json"
+    config.write_text(
+        '{"mcpServers": {"other": {"command": "other"}}}\n',
+        encoding="utf-8",
+    )
+
+    result = install_claude_desktop_mcp_config(config_path=config)
+    data = json.loads(config.read_text(encoding="utf-8"))
+
+    assert result.changed is True
+    assert data["mcpServers"]["other"]["command"] == "other"
+    assert data["mcpServers"]["ai-memory"] == mcp_json_server()
+
+
+def test_install_vscode_mcp_config_writes_user_mcp_json(tmp_path: Path):
+    config = tmp_path / "mcp.json"
+    config.write_text('{"servers": {"playwright": {"command": "npx"}}}\n', encoding="utf-8")
+
+    result = install_vscode_mcp_config(config_path=config)
+    data = json.loads(config.read_text(encoding="utf-8"))
+
+    assert result.changed is True
+    assert data["servers"]["playwright"]["command"] == "npx"
+    assert data["servers"]["ai-memory"]["type"] == "stdio"
+    assert data["servers"]["ai-memory"]["command"] == mcp_json_server()["command"]
 
 
 def test_frozen_mcp_command_reuses_app_executable():

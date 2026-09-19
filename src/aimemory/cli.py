@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from aimemory.cloud import LocalFolderProvider
-from aimemory.installer import install_mcp_config, install_watcher_service, resolve_mcp_command
+from aimemory.installer import install_all_mcp_configs, install_watcher_service, resolve_mcp_command
 from aimemory.service import MemoryService
 from aimemory.sync import SyncService
 from aimemory.watcher import WatcherService
@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_parser.add_argument("--server-name", default="ai-memory")
     mcp_parser.add_argument("--ai-memory-home", type=Path, default=None)
 
-    install_mcp_parser = sub.add_parser("install-mcp", help="Write AI Memory into Codex MCP config.")
+    install_mcp_parser = sub.add_parser("install-mcp", help="Write AI Memory into available MCP client configs.")
     install_mcp_parser.add_argument("--server-name", default="ai-memory")
     install_mcp_parser.add_argument("--ai-memory-home", type=Path, default=None)
 
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "install-mcp":
-        result = install_mcp_config(args.server_name, ai_memory_home=args.ai_memory_home)
+        result = install_all_mcp_configs(args.server_name, ai_memory_home=args.ai_memory_home)
         print(json.dumps(asdict(result), indent=2, sort_keys=True))
         return 0
 

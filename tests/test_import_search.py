@@ -139,6 +139,38 @@ def test_claude_adapter_imports_jsonl_project_session(tmp_path):
     assert [message.role for message in conversation.messages] == ["user", "assistant"]
 
 
+def test_claude_adapter_labels_desktop_and_uses_project_folder_when_cwd_missing(tmp_path):
+    claude_home = tmp_path / "claude"
+    session = (
+        claude_home
+        / "projects"
+        / "-Users-julia-Documents-Perso-sabai"
+        / "claude-desktop-session.jsonl"
+    )
+    session.parent.mkdir(parents=True)
+    session.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "sessionId": "claude-desktop-session",
+                "timestamp": "2026-09-18T10:00:00Z",
+                "entrypoint": "claude-desktop",
+                "message": {"role": "user", "content": "Projet Sabai"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    conversation = ClaudeAdapter(claude_home=claude_home).parse_session(session)
+
+    assert conversation.source == "claude-desktop"
+    assert conversation.project is not None
+    assert conversation.project.name == "sabai"
+    assert conversation.project.cwd == "/Users/julia/Documents/Perso/sabai"
+    assert conversation.metadata["claude_client"] == "claude-desktop"
+    assert conversation.metadata["claude_project_dir"] == "-Users-julia-Documents-Perso-sabai"
+
+
 def test_claude_adapter_labels_vscode_entrypoint(tmp_path):
     claude_home = tmp_path / "claude"
     session = claude_home / "projects" / "-tmp-project" / "claude-vscode-session.jsonl"

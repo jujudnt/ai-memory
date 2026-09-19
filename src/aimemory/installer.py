@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,6 +73,136 @@ def install_mcp_config(
     return InstallResult(True, "MCP config installed.", str(config_path))
 
 
+def install_all_mcp_configs(
+    server_name: str = MCP_SERVER_NAME,
+    ai_memory_home: Path | None = None,
+) -> InstallResult:
+    results = [("Codex", install_mcp_config(server_name, ai_memory_home=ai_memory_home))]
+    if claude_desktop_available():
+        results.append(("Claude Desktop", install_claude_desktop_mcp_config(server_name, ai_memory_home=ai_memory_home)))
+    vscode_path = vscode_user_mcp_config_path()
+    if vscode_path:
+        results.append(("VS Code", install_vscode_mcp_config(server_name, vscode_path, ai_memory_home)))
+    changed = any(result.changed for _, result in results)
+    clients = ", ".join(name for name, _ in results)
+    message = (
+        f"MCP config installed for {clients}."
+        if changed
+        else f"MCP config already up to date for {clients}."
+    )
+    paths = "; ".join(f"{name}: {result.path}" for name, result in results if result.path)
+    return InstallResult(changed, message, paths)
+
+
+def install_claude_desktop_mcp_config(
+    server_name: str = MCP_SERVER_NAME,
+    config_path: Path | None = None,
+    ai_memory_home: Path | None = None,
+) -> InstallResult:
+    config_path = config_path or claude_desktop_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config = _read_json_object(config_path)
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    desired = mcp_json_server(ai_memory_home)
+    existing = servers.get(server_name)
+    servers[server_name] = desired
+    config["mcpServers"] = servers
+    if existing == desired and config_path.exists():
+        return InstallResult(False, "Claude Desktop MCP config already up to date.", str(config_path))
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Claude Desktop MCP config installed.", str(config_path))
+
+
+def install_vscode_mcp_config(
+    server_name: str = MCP_SERVER_NAME,
+    config_path: Path | None = None,
+    ai_memory_home: Path | None = None,
+) -> InstallResult:
+    config_path = config_path or vscode_user_mcp_config_path()
+    if not config_path:
+        return InstallResult(False, "VS Code not detected.", None)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config = _read_json_object(config_path)
+    servers = config.get("servers")
+    if not isinstance(servers, dict):
+        servers = {}
+    desired = {"type": "stdio", **mcp_json_server(ai_memory_home)}
+    existing = servers.get(server_name)
+    servers[server_name] = desired
+    config["servers"] = servers
+    if existing == desired and config_path.exists():
+        return InstallResult(False, "VS Code MCP config already up to date.", str(config_path))
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "VS Code MCP config installed.", str(config_path))
+
+
+def claude_desktop_available() -> bool:
+    path = claude_desktop_config_path()
+    if path.exists() or path.parent.exists():
+        return True
+    if platform.system().lower() == "darwin":
+        return Path("/Applications/Claude.app").exists() or (Path.home() / "Applications" / "Claude.app").exists()
+    return False
+
+
+def claude_desktop_config_path() -> Path:
+    system = platform.system().lower()
+    if system == "darwin":
+        return Path("~/Library/Application Support/Claude/claude_desktop_config.json").expanduser()
+    if system == "windows":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "Claude" / "claude_desktop_config.json"
+    return Path("~/.config/Claude/claude_desktop_config.json").expanduser()
+
+
+def vscode_user_mcp_config_path() -> Path | None:
+    explicit = os.environ.get("AI_MEMORY_VSCODE_MCP_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    system = platform.system().lower()
+    candidates: list[Path]
+    if system == "darwin":
+        support = Path("~/Library/Application Support").expanduser()
+        candidates = [
+            support / "Code" / "User" / "mcp.json",
+            support / "Code - Insiders" / "User" / "mcp.json",
+            support / "VSCodium" / "User" / "mcp.json",
+        ]
+    elif system == "windows":
+        appdata = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
+        candidates = [
+            appdata / "Code" / "User" / "mcp.json",
+            appdata / "Code - Insiders" / "User" / "mcp.json",
+            appdata / "VSCodium" / "User" / "mcp.json",
+        ]
+    else:
+        config = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+        candidates = [
+            config / "Code" / "User" / "mcp.json",
+            config / "Code - Insiders" / "User" / "mcp.json",
+            config / "VSCodium" / "User" / "mcp.json",
+        ]
+    for candidate in candidates:
+        if candidate.exists() or candidate.parent.exists():
+            return candidate
+    if shutil.which("code"):
+        return candidates[0]
+    return None
+
+
+def mcp_json_server(ai_memory_home: Path | None = None) -> dict:
+    command, args = resolve_mcp_command()
+    server: dict = {"command": command}
+    if args:
+        server["args"] = args
+    if ai_memory_home:
+        server["env"] = {"AI_MEMORY_HOME": str(ai_memory_home.expanduser())}
+    return server
+
+
 def mcp_toml_block(
     server_name: str = MCP_SERVER_NAME,
     ai_memory_home: Path | None = None,
@@ -94,6 +225,18 @@ def mcp_toml_block(
         ]
     )
     return "\n".join(lines)
+
+
+def _read_json_object(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Configuration Claude Desktop illisible: {path}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Configuration Claude Desktop invalide: {path}")
+    return data
 
 
 def install_watcher_service(interval_seconds: float = 10.0) -> InstallResult:

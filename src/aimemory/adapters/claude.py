@@ -21,7 +21,7 @@ from aimemory.projects import identify_project
 
 class ClaudeAdapter:
     source = "claude"
-    parser_version = 2
+    parser_version = 3
 
     def __init__(self, claude_home: Path | None = None, device_id: str | None = None):
         self.claude_home = claude_home or Path("~/.claude").expanduser()
@@ -53,6 +53,7 @@ class ClaudeAdapter:
         git_branch = None
         model = None
         entrypoint = None
+        project_dir = _project_dir(path, self.claude_home)
 
         for ordinal, record in enumerate(records):
             if isinstance(record.get("sessionId"), str):
@@ -97,7 +98,8 @@ class ClaudeAdapter:
                 if name == "Bash" and isinstance(item.get("input"), dict) and isinstance(item["input"].get("command"), str):
                     commands.append(item["input"]["command"])
 
-        actual_source = "vscode-claude" if entrypoint == "claude-vscode" else self.source
+        cwd = cwd or _cwd_from_project_dir(project_dir)
+        actual_source = _source_from_entrypoint(entrypoint)
         return NormalizedConversation(
             schema_version=1,
             id=conversation_id(self.source, source_session_id),
@@ -118,6 +120,8 @@ class ClaudeAdapter:
                 "raw_record_count": len(records),
                 "parser_version": self.parser_version,
                 "claude_entrypoint": entrypoint,
+                "claude_project_dir": project_dir,
+                "claude_client": actual_source,
             },
         )
 
@@ -133,3 +137,27 @@ def _custom_title(path: Path) -> str | None:
         return None
     title = data.get("title") or data.get("customTitle") or data.get("name")
     return title[:120] if isinstance(title, str) and title.strip() else None
+
+
+def _project_dir(path: Path, claude_home: Path) -> str | None:
+    try:
+        relative = path.relative_to(claude_home / "projects")
+    except ValueError:
+        return None
+    return relative.parts[0] if relative.parts else None
+
+
+def _cwd_from_project_dir(project_dir: str | None) -> str | None:
+    if not project_dir or not project_dir.startswith("-"):
+        return None
+    value = "/" + project_dir[1:].replace("-", "/")
+    return value or None
+
+
+def _source_from_entrypoint(entrypoint: str | None) -> str:
+    return {
+        "claude-vscode": "vscode-claude",
+        "claude-desktop": "claude-desktop",
+        "claude-code": "claude-code",
+        "claude-cli": "claude-code",
+    }.get(entrypoint or "", "claude")

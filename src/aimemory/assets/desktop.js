@@ -5,6 +5,7 @@ let current = null;
 let requestBusy = false;
 let lastJobMessage = "";
 let switchingCloud = false;
+let icloudAwaiting2FA = false;
 const size = (value) => {
   const n = Math.max(0, Number(value || 0));
   const units = ["o", "Ko", "Mo", "Go", "To"];
@@ -62,6 +63,8 @@ const providerNotes = {
   "local-folder":
     "Choisissez un dossier local, externe ou synchronis\u00e9. L'app v\u00e9rifie l'espace libre avant de copier.",
 };
+const icloud2faMessage =
+  "Code demand\u00e9. Validez la demande Apple sur votre appareil, entrez le code ici, puis cliquez sur Confirmer le code iCloud.";
 function notice(message, error = false) {
   for (const selector of ["#message", "#settings-message"]) {
     const el = $(selector);
@@ -142,9 +145,20 @@ function render(data) {
     ? "Service install\u00e9"
     : "Non configur\u00e9e";
   $("#autostart-enable").hidden = !!installed;
+  const mcpClients = Object.values(data.mcp_clients || {}).filter(
+    (client) => client.available,
+  );
+  const readyMcpClients = mcpClients
+    .filter((client) => client.configured)
+    .map((client) => client.label);
+  const missingMcpClients = mcpClients
+    .filter((client) => !client.configured)
+    .map((client) => client.label);
   $("#mcp-status").textContent = data.mcp_configured
-    ? "Configur\u00e9 dans Codex"
-    : "Non configur\u00e9";
+    ? `Actif dans ${readyMcpClients.join(", ")}`
+    : missingMcpClients.length
+      ? `\u00c0 activer pour ${missingMcpClients.join(", ")}`
+      : "Non configur\u00e9";
   $("#mcp-enable").hidden = !!data.mcp_configured;
   $("#menubar-setting").hidden = !data.menubar_available;
   $("#menubar-login").checked = !!data.menubar_login;
@@ -232,6 +246,7 @@ function render(data) {
     lastJobMessage = data.job.message;
     notice(data.job.message, data.job.error);
   }
+  updateProviderFields();
   icons();
   busy();
 }
@@ -264,7 +279,7 @@ async function action(name, body = {}) {
         oauth_client: file ? JSON.parse(await file.text()) : null,
         icloud_apple_id: $("#icloud-apple-id").value,
         icloud_password: $("#icloud-password").value,
-        icloud_2fa: $("#icloud-2fa").value,
+        icloud_2fa: icloudAwaiting2FA ? $("#icloud-2fa").value : "",
         onedrive_type: $("#onedrive-type").value,
       };
     }
@@ -280,10 +295,25 @@ async function action(name, body = {}) {
     if (!res.ok) throw new Error(data.message);
     if (name === "connect-cloud" || name === "disconnect-cloud")
       switchingCloud = false;
+    if (name === "connect-cloud" || name === "disconnect-cloud")
+      icloudAwaiting2FA = false;
     notice(data.message);
     await refresh();
   } catch (error) {
-    notice(error.message, true);
+    const wantsIcloudCode =
+      name === "connect-cloud" &&
+      $("#provider").value === "icloud-online" &&
+      /2FA|code de validation|code Apple|iCloud Drive attend|two-factor|verification/i.test(
+        error.message,
+      );
+    if (wantsIcloudCode) {
+      icloudAwaiting2FA = true;
+      updateProviderFields();
+      notice(icloud2faMessage);
+      $("#icloud-2fa").focus();
+    } else {
+      notice(error.message, true);
+    }
   } finally {
     requestBusy = false;
     busy();
@@ -301,24 +331,37 @@ $("#menubar-login").addEventListener("change", async (event) => {
 });
 $("#cloud-switch").addEventListener("click", () => {
   switchingCloud = true;
+  icloudAwaiting2FA = false;
   render(current);
   $("#provider").focus();
 });
-$("#provider").addEventListener("change", (event) => {
-  const google = event.target.value === "google-drive";
-  const icloudOnline = event.target.value === "icloud-online";
-  const onedriveOnline = event.target.value === "onedrive-online";
-  const customFolder = event.target.value === "local-folder";
+function updateProviderFields() {
+  const value = $("#provider").value;
+  const google = value === "google-drive";
+  const icloudOnline = value === "icloud-online";
+  const onedriveOnline = value === "onedrive-online";
+  const customFolder = value === "local-folder";
   $("#folder-label").hidden = !customFolder;
   $("#oauth-settings").hidden = !google;
   $("#icloud-fields").hidden = !icloudOnline;
+  $("#icloud-2fa-label").hidden = !icloudOnline || !icloudAwaiting2FA;
   $("#onedrive-fields").hidden = !onedriveOnline;
-  const label = providerNames[event.target.value] || "la destination";
-  $('[data-action="connect-cloud"]').textContent = `Connecter ${label}`;
+  const label = providerNames[value] || "la destination";
+  $('[data-action="connect-cloud"]').textContent =
+    icloudOnline && icloudAwaiting2FA
+      ? "Confirmer le code iCloud"
+      : `Connecter ${label}`;
   $("#provider-note").textContent =
-    providerNotes[event.target.value] || providerNotes["local-folder"];
+    icloudOnline && icloudAwaiting2FA
+      ? icloud2faMessage
+      : providerNotes[value] || providerNotes["local-folder"];
+}
+$("#provider").addEventListener("change", () => {
+  icloudAwaiting2FA = false;
+  $("#icloud-2fa").value = "";
+  updateProviderFields();
 });
-$("#provider").dispatchEvent(new Event("change"));
+updateProviderFields();
 icons();
 async function poll() {
   await refresh();
@@ -331,6 +374,8 @@ function sourceName(source) {
     {
       codex: "Codex",
       claude: "Claude",
+      "claude-code": "Claude Code",
+      "claude-desktop": "Claude Desktop",
       vscode: "VS Code",
       "vscode-codex": "Codex VS Code",
       "vscode-claude": "Claude VS Code",
