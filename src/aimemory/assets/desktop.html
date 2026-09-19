@@ -122,7 +122,7 @@
       </section>
       <footer>
         <span><span class="tiny-dot"></span> Stockage local</span
-        ><span id="footer-size"></span><span>v0.4.1</span>
+        ><span id="footer-size"></span><span>v0.4.2</span>
       </footer>
     </main>
     <dialog id="settings" aria-labelledby="settings-title">
@@ -207,17 +207,25 @@
                   placeholder="nom@icloud.com"
               /></label>
               <label
-                >Mot de passe sp&eacute;cifique d'app Apple<input
+                >Mot de passe Apple ID<input
                   id="icloud-password"
                   type="password"
                   autocomplete="current-password"
               /></label>
+              <label
+                >Code 2FA Apple<input
+                  id="icloud-2fa"
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  placeholder="123456"
+              /></label>
               <p class="muted small">
-                Apple ID avec double authentification : cr&eacute;ez un mot de
-                passe sp&eacute;cifique d'app sur appleid.apple.com, puis
-                collez-le ici. Pour utiliser le compte iCloud d&eacute;j&agrave;
-                connect&eacute; &agrave; macOS, choisissez plut&ocirc;t
-                iCloud Drive du Mac.
+                Apple ID avec double authentification : lancez la connexion,
+                validez la demande sur votre iPhone, puis saisissez ici le code
+                affich&eacute; et reconnectez. Les mots de passe
+                sp&eacute;cifiques d'app ne sont pas accept&eacute;s par iCloud
+                Drive. Pour utiliser le compte iCloud d&eacute;j&agrave;
+                connect&eacute; &agrave; macOS, choisissez iCloud Drive du Mac.
               </p>
             </div>
             <label id="folder-label" hidden

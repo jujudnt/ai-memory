@@ -93,10 +93,13 @@ class RcloneCloudProvider:
             if self.spec.provider == "icloud-online":
                 apple_id = str(options.get("apple_id") or "").strip()
                 password = str(options.get("password") or "")
+                two_factor_code = str(options.get("two_factor_code") or "").strip()
                 if not apple_id or not password:
                     raise ValueError("Renseignez l'Apple ID et le mot de passe iCloud.")
                 obscured = self.run(["obscure", password], timeout=30, config=pending).strip()
                 args.extend(["apple_id", apple_id, "password", obscured])
+                if two_factor_code:
+                    args.extend(["config_2fa", two_factor_code])
             args.append("--no-output")
             self.run(args, timeout=300, config=pending)
             parser = configparser.ConfigParser(interpolation=None)
@@ -195,11 +198,11 @@ def _friendly_rclone_error(provider: str, output: str | bytes | None, code: int)
     lowered = text.lower()
     name = provider_label(provider)
     if provider == "icloud-online":
-        if any(marker in lowered for marker in ("2fa", "two-factor", "verification", "mfa", "app-specific", "password", "auth", "unauthorized", "forbidden")):
+        if any(marker in lowered for marker in ("2fa", "two-factor", "verification", "mfa", "auth", "unauthorized", "forbidden")):
             return (
-                "iCloud Drive en ligne a refusé la connexion. Avec la double authentification Apple, "
-                "utilisez un mot de passe spécifique d'app créé sur appleid.apple.com, ou choisissez "
-                "iCloud Drive du Mac pour utiliser le compte iCloud déjà connecté à macOS."
+                "iCloud Drive attend le code de validation Apple. Saisissez le code 2FA affiché sur votre iPhone "
+                "dans le champ Code 2FA Apple, puis reconnectez. Utilisez le mot de passe Apple ID normal, pas un "
+                "mot de passe spécifique d'app."
             )
     if any(marker in lowered for marker in ("insufficient storage", "not enough space", "quota", "storage full", "drive is full")):
         return f"{name} est plein. Libérez de l'espace ou changez de destination cloud."
@@ -207,7 +210,7 @@ def _friendly_rclone_error(provider: str, output: str | bytes | None, code: int)
         return f"Connexion {name} refusée ou expirée. Reconnectez ce compte."
     if provider == "icloud-online":
         return (
-            "Connexion iCloud Drive en ligne impossible. Si votre Apple ID utilise la double authentification, "
-            "créez un mot de passe spécifique d'app Apple, puis réessayez. Sinon utilisez iCloud Drive du Mac."
+            "Connexion iCloud Drive en ligne incomplète. Validez la demande sur votre appareil Apple, saisissez le "
+            "code 2FA reçu dans AI Memory, puis reconnectez. Sinon utilisez iCloud Drive du Mac."
         )
     return f"{name} a échoué (code {code}). Vérifiez la connexion puis relancez."

@@ -131,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
                     options = {
                         "apple_id": self.body.get("icloud_apple_id"),
                         "password": self.body.get("icloud_password"),
+                        "two_factor_code": self.body.get("icloud_2fa"),
                         "onedrive_type": self.body.get("onedrive_type"),
                     }
                     with _cloud_config_lock(self.state.service):

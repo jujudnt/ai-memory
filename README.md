@@ -31,7 +31,7 @@ For the release application:
 
 1. Extract the zip. On macOS, move `AI Memory.app` to Applications before installing the watcher or enabling MCP.
 2. Open the app and click **Activer** beside the collector. Historical sessions are imported automatically; the collector continues after the UI closes.
-3. Click **Connecter**, then choose **Google Drive**, **Dropbox**, **OneDrive**, **iCloud Drive** or a local-folder option. Google Drive, Dropbox and OneDrive open a browser authorization under the name **rclone** and create the `AI-Memory` folder. iCloud Drive online uses rclone credentials, separate from the iCloud account signed in to macOS; with Apple double authentication, use an app-specific password from appleid.apple.com. The “du Mac” options use the official local sync folder already installed on the Mac.
+3. Click **Connecter**, then choose **Google Drive**, **Dropbox**, **OneDrive**, **iCloud Drive** or a local-folder option. Google Drive, Dropbox and OneDrive open a browser authorization under the name **rclone** and create the `AI-Memory` folder. iCloud Drive online uses rclone credentials, separate from the iCloud account signed in to macOS; with Apple double authentication, validate the prompt on your Apple device, enter the 2FA code in AI Memory, and reconnect. The “du Mac” options use the official local sync folder already installed on the Mac.
 4. Open **Reglages** (the settings icon), activate **MCP pour Codex**, and restart the Codex client so it reads its updated configuration.
 5. Under **Verification et diagnostics**, use **Verifier les copies** to compare original Codex files with raw backups and normalized messages/tool calls. Active sessions can change during the check and are reported separately.
 
@@ -44,6 +44,8 @@ Cloud transfers run after connection, with the synchronization icon, or every mi
 If a cloud destination is full, AI Memory stops the transfer with an explicit quota message. Free space in that account or use **Changer de destination** to connect another cloud account without deleting local backups. Folder-based providers check local free space before copying; their official client then handles the cloud upload.
 
 Cloud archives are **not end-to-end encrypted** in this version. rclone credentials are stored in the local `credentials` directory, restricted to the local user on macOS/Linux. Disconnect removes the local authorization and keeps both local and remote backups; revoke rclone access in the provider account to revoke the grant itself.
+
+**iCloud Drive online:** use the normal Apple ID password plus the 2FA code shown on a trusted Apple device. App-specific passwords are not accepted by rclone's iCloud Drive backend. If you want the iCloud account already connected to this Mac, choose **iCloud Drive du Mac** instead.
 
 **Google OAuth:** rclone's shared Google client is being retired during 2026. The default flow is available for testing while it remains active. For durable use, create a Desktop OAuth client following [rclone's official instructions](https://rclone.org/drive/#making-your-own-client-id), then select its JSON under **Client OAuth personnel** before connecting. Use the same OAuth client on all computers. A different OAuth client cannot see files created under the old `drive.file` grant, so keep local backups when migrating.
 

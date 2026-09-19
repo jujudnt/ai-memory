@@ -52,7 +52,7 @@ const providerNotes = {
   "onedrive-online":
     "Connexion directe OneDrive via rclone. Choisissez personnel ou professionnel selon le compte \u00e0 connecter.",
   "icloud-online":
-    "Connexion directe iCloud via rclone, ind\u00e9pendante de l'iCloud local du Mac. Avec la double authentification Apple, utilisez un mot de passe sp\u00e9cifique d'app. Sinon choisissez iCloud Drive du Mac.",
+    "Connexion directe iCloud via rclone, ind\u00e9pendante de l'iCloud local du Mac. Utilisez le mot de passe Apple ID normal puis le code 2FA affich\u00e9 sur votre appareil. Les mots de passe sp\u00e9cifiques d'app ne sont pas accept\u00e9s.",
   "icloud-drive":
     "Sauvegarde dans l'iCloud Drive d\u00e9j\u00e0 connect\u00e9 \u00e0 cette session macOS.",
   onedrive:
@@ -264,6 +264,7 @@ async function action(name, body = {}) {
         oauth_client: file ? JSON.parse(await file.text()) : null,
         icloud_apple_id: $("#icloud-apple-id").value,
         icloud_password: $("#icloud-password").value,
+        icloud_2fa: $("#icloud-2fa").value,
         onedrive_type: $("#onedrive-type").value,
       };
     }

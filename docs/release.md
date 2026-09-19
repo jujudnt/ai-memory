@@ -37,7 +37,9 @@ V0.3.2 adds iCloud Drive, OneDrive, Dropbox and custom synchronized-folder desti
 
 V0.3.3 lets the desktop UI change or disconnect the cloud destination while a transfer is running by cancelling the active transfer first, instead of surfacing a lock-file error.
 
-V0.4.1 separates Codex and Claude sessions launched from VS Code in the local index, while preserving their canonical archive IDs. It also improves iCloud Drive online setup guidance for Apple double authentication and app-specific passwords.
+V0.4.1 separates Codex and Claude sessions launched from VS Code in the local index, while preserving their canonical archive IDs. It also improves iCloud Drive online setup guidance for Apple double authentication.
+
+V0.4.2 adds the missing iCloud Drive 2FA input field and passes rclone's `config_2fa` value during online iCloud setup. It also clarifies that iCloud Drive requires the normal Apple ID password plus 2FA, not an app-specific password.
 
 ## macOS Gatekeeper
 

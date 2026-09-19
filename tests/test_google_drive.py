@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from aimemory.cloud.google_drive import GoogleDriveProvider, _friendly_google_error, rclone_binary
-from aimemory.cloud.rclone_provider import _friendly_rclone_error
+from aimemory.cloud.rclone_provider import RcloneCloudProvider, _friendly_rclone_error
 from aimemory.config import AppPaths
 from aimemory.state import read_json
 
@@ -63,8 +63,37 @@ def test_google_quota_errors_are_actionable():
     assert "iCloud" in message
 
 
-def test_icloud_auth_errors_explain_app_specific_password():
+def test_icloud_auth_errors_explain_2fa_code():
     message = _friendly_rclone_error("icloud-online", "unauthorized: two-factor verification required", 1)
 
-    assert "mot de passe spécifique d'app" in message
-    assert "iCloud Drive du Mac" in message
+    assert "code 2FA" in message
+    assert "pas un mot de passe spécifique d'app" in message
+
+
+def test_icloud_connect_passes_2fa_code_to_rclone(tmp_path, monkeypatch):
+    provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
+    calls = []
+
+    def run(args, timeout=600, config=None):
+        calls.append(args)
+        if args[0] == "obscure":
+            return "obscured-password"
+        if args[:2] == ["config", "create"]:
+            config.write_text(
+                "[aimemory-icloud]\n"
+                "type = iclouddrive\n"
+                "apple_id = julia@example.com\n"
+                "password = obscured-password\n"
+                "cookies = cookie\n"
+                "trust_token = token\n",
+                encoding="utf-8",
+            )
+        return ""
+
+    monkeypatch.setattr(provider, "run", run)
+
+    provider.connect({"apple_id": "julia@example.com", "password": "secret", "two_factor_code": "123456"})
+
+    create_call = next(call for call in calls if call[:2] == ["config", "create"])
+    assert "config_2fa" in create_call
+    assert create_call[create_call.index("config_2fa") + 1] == "123456"
