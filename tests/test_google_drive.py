@@ -89,6 +89,7 @@ def test_icloud_pcs_errors_explain_advanced_data_protection():
 
 def test_icloud_run_classifies_web_approval_separately(tmp_path, monkeypatch):
     provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
+    monkeypatch.setattr("aimemory.cloud.rclone_provider.rclone_binary", lambda: "rclone")
     monkeypatch.setattr(
         subprocess,
         "run",
