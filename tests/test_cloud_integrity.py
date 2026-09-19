@@ -234,6 +234,51 @@ def test_changing_destination_reuploads_current_conversations(tmp_path):
     assert list((first / "raw").rglob("*.gz"))
 
 
+def test_switch_pulls_old_cloud_conversations_before_populating_new_cloud(tmp_path):
+    old_cloud = tmp_path / "old-cloud"
+    new_cloud = tmp_path / "new-cloud"
+    first_computer = memory(tmp_path / "first-computer")
+    switching_computer = memory(tmp_path / "switching-computer")
+
+    old_source = tmp_path / "old-source"
+    session(old_source, "old", text="conversation from old cloud")
+    first_computer.import_codex(old_source)
+    write_json(
+        first_computer.paths.state / "cloud.json",
+        {"provider": "local-folder", "root": str(old_cloud), "connection_id": "old"},
+    )
+    first_computer.sync_now()
+
+    local_source = tmp_path / "local-source"
+    session(local_source, "local", text="conversation from this computer")
+    switching_computer.import_codex(local_source)
+    write_json(
+        switching_computer.paths.state / "cloud.json",
+        {"provider": "local-folder", "root": str(old_cloud), "connection_id": "old"},
+    )
+    old_object_count = len(list((old_cloud / "snapshots").rglob("*.json.*")))
+
+    switching_computer.pull_cloud_now()
+
+    assert switching_computer.search("conversation from old cloud")
+    assert len(list((old_cloud / "snapshots").rglob("*.json.*"))) == old_object_count
+
+    write_json(
+        switching_computer.paths.state / "cloud.json",
+        {"provider": "local-folder", "root": str(new_cloud), "connection_id": "new"},
+    )
+    switching_computer.sync_now()
+
+    restored = memory(tmp_path / "restored")
+    write_json(
+        restored.paths.state / "cloud.json",
+        {"provider": "local-folder", "root": str(new_cloud), "connection_id": "new"},
+    )
+    restored.sync_now()
+    assert restored.search("conversation from old cloud")
+    assert restored.search("conversation from this computer")
+
+
 def test_local_cloud_provider_reports_insufficient_space(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from aimemory.sync.cloud_sync import _ensure_available_space

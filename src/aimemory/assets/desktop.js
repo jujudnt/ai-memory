@@ -72,8 +72,11 @@ function isIcloud2FAError(message = "") {
 }
 function revealIcloud2FA() {
   if ($("#provider").value !== "icloud-online") return;
+  const wasWaiting = icloudAwaiting2FA;
   icloudAwaiting2FA = true;
   switchingCloud = true;
+  $("#icloud-password").value = "";
+  if (!wasWaiting) $("#icloud-2fa").value = "";
   settings();
   updateProviderFields();
   notice(icloud2faMessage);
@@ -259,7 +262,25 @@ function render(data) {
       row.updated_at || row.created_at || "";
     list.append(item);
   }
+  const pendingIcloud =
+    data.icloud_auth?.status === "needs_2fa" ||
+    data.job?.result?.status === "needs_2fa";
   if (
+    icloudAwaiting2FA &&
+    !pendingIcloud &&
+    configured &&
+    storage.provider === "icloud-online" &&
+    !data.job?.running &&
+    !data.job?.error
+  ) {
+    icloudAwaiting2FA = false;
+    switchingCloud = false;
+    $("#icloud-2fa").value = "";
+  }
+  if (pendingIcloud && !icloudAwaiting2FA) {
+    $("#provider").value = "icloud-online";
+    revealIcloud2FA();
+  } else if (
     data.job?.error &&
     $("#provider").value === "icloud-online" &&
     isIcloud2FAError(data.job.message) &&
@@ -301,8 +322,12 @@ async function action(name, body = {}) {
         provider: $("#provider").value,
         folder: $("#folder").value,
         oauth_client: file ? JSON.parse(await file.text()) : null,
-        icloud_apple_id: $("#icloud-apple-id").value,
-        icloud_password: $("#icloud-password").value,
+        icloud_apple_id: icloudAwaiting2FA
+          ? ""
+          : $("#icloud-apple-id").value,
+        icloud_password: icloudAwaiting2FA
+          ? ""
+          : $("#icloud-password").value,
         icloud_2fa: icloudAwaiting2FA ? $("#icloud-2fa").value : "",
         onedrive_type: $("#onedrive-type").value,
       };
@@ -363,7 +388,9 @@ function updateProviderFields() {
   $("#folder-label").hidden = !customFolder;
   $("#oauth-settings").hidden = !google;
   $("#icloud-fields").hidden = !icloudOnline;
+  $("#icloud-credentials").hidden = icloudOnline && icloudAwaiting2FA;
   $("#icloud-2fa-label").hidden = !icloudOnline || !icloudAwaiting2FA;
+  $("#icloud-flow-help").hidden = icloudOnline && icloudAwaiting2FA;
   $("#onedrive-fields").hidden = !onedriveOnline;
   const label = providerNames[value] || "la destination";
   $('[data-action="connect-cloud"]').textContent =

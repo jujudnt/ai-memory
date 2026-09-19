@@ -27,7 +27,7 @@ class CloudSync:
         self.paths = service.paths
         self.status_path = self.paths.state / "sync-status.json"
 
-    def run(self) -> dict:
+    def run(self, pull_only: bool = False) -> dict:
         with FileLock(str(self.paths.state / "sync.lock"), timeout=1):
             clear_cancel(self.paths)
             config = read_json(self.paths.state / "cloud.json")
@@ -56,7 +56,9 @@ class CloudSync:
                         include_current_sources=destination_changed,
                     )
                 )
-                uploads = [(relative, path) for relative, path in local_objects if relative not in remote_objects]
+                uploads = [] if pull_only else [
+                    (relative, path) for relative, path in local_objects if relative not in remote_objects
+                ]
                 if uploads and config["provider"] in LOCAL_FOLDER_PROVIDERS:
                     _ensure_available_space_for_files((path for _, path in uploads), remote.root)
                 for index, (relative, path) in enumerate(uploads, start=1):

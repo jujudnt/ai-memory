@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -70,12 +71,12 @@ def test_icloud_auth_errors_explain_2fa_code():
     assert "pas un mot de passe spécifique d'app" in message
 
 
-def test_icloud_connect_passes_2fa_code_to_rclone(tmp_path, monkeypatch):
+def test_icloud_connect_continues_the_same_apple_session(tmp_path, monkeypatch):
     provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
     calls = []
 
     def run(args, timeout=600, config=None):
-        calls.append(args)
+        calls.append((args, config))
         if args[0] == "obscure":
             return "obscured-password"
         if args[:2] == ["config", "create"]:
@@ -84,16 +85,95 @@ def test_icloud_connect_passes_2fa_code_to_rclone(tmp_path, monkeypatch):
                 "type = iclouddrive\n"
                 "apple_id = julia@example.com\n"
                 "password = obscured-password\n"
-                "cookies = cookie\n"
-                "trust_token = token\n",
+                "_auth_session = preserved-session\n"
+                "cookies = first-cookie\n",
+                encoding="utf-8",
+            )
+            return json.dumps(
+                {
+                    "State": "2fa_do",
+                    "Option": {"Name": "config_2fa", "Help": "Enter the verification code"},
+                    "Error": "",
+                    "Result": "",
+                }
+            )
+        if args[:2] == ["config", "update"]:
+            assert "_auth_session = preserved-session" in config.read_text(encoding="utf-8")
+            config.write_text(
+                "[aimemory-icloud]\n"
+                "type = iclouddrive\n"
+                "apple_id = julia@example.com\n"
+                "password = obscured-password\n"
+                "cookies = trusted-cookie\n"
+                "trust_token = trusted-token\n",
+                encoding="utf-8",
+            )
+            return json.dumps({"State": "", "Option": None, "Error": "", "Result": ""})
+        return ""
+
+    monkeypatch.setattr(provider, "run", run)
+
+    first = provider.connect({"apple_id": "julia@example.com", "password": "secret"})
+
+    assert first["status"] == "needs_2fa"
+    assert provider.icloud_pending_config.exists()
+    assert provider.icloud_auth_state_path.exists()
+    create_call = next(args for args, _ in calls if args[:2] == ["config", "create"])
+    assert "--non-interactive" in create_call
+    assert "config_2fa" not in create_call
+
+    second = provider.connect({"two_factor_code": "123456"})
+
+    assert second["status"] == "connected"
+    update_call = next(args for args, _ in calls if args[:2] == ["config", "update"])
+    assert update_call[update_call.index("--state") + 1] == "2fa_do"
+    assert update_call[update_call.index("--result") + 1] == "123456"
+    assert "apple_id" not in update_call
+    assert "password" not in update_call
+    assert provider.config.exists()
+    assert not provider.icloud_pending_config.exists()
+    assert not provider.icloud_auth_state_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("name", "options", "expected"),
+    [
+        ("dropbox-online", {}, ["config_is_local", "true"]),
+        (
+            "onedrive-online",
+            {"onedrive_type": "business"},
+            ["config_is_local", "true", "region", "global", "drive_type", "business"],
+        ),
+    ],
+)
+def test_browser_cloud_connectors_create_a_tokenized_remote(tmp_path, monkeypatch, name, options, expected):
+    provider = RcloneCloudProvider.for_provider(paths(tmp_path / name), name)
+    calls = []
+
+    def run(args, timeout=600, config=None):
+        calls.append(args)
+        if args[:2] == ["config", "create"]:
+            config.write_text(
+                f"[{provider.spec.remote_name}]\n"
+                f"type = {provider.spec.backend}\n"
+                'token = {"access_token":"private"}\n',
                 encoding="utf-8",
             )
         return ""
 
     monkeypatch.setattr(provider, "run", run)
-
-    provider.connect({"apple_id": "julia@example.com", "password": "secret", "two_factor_code": "123456"})
+    provider.connect(options)
 
     create_call = next(call for call in calls if call[:2] == ["config", "create"])
-    assert "config_2fa" in create_call
-    assert create_call[create_call.index("config_2fa") + 1] == "123456"
+    for index in range(0, len(expected), 2):
+        key = expected[index]
+        assert create_call[create_call.index(key) + 1] == expected[index + 1]
+    assert "private" not in str(read_json(provider.paths.state / "cloud.json"))
+    assert provider.config.stat().st_mode & 0o777 == 0o600
+
+
+def test_icloud_code_without_a_pending_session_is_rejected(tmp_path):
+    provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
+
+    with pytest.raises(RuntimeError, match="session Apple"):
+        provider.connect({"two_factor_code": "123456"})

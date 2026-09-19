@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from aimemory.cloud.google_drive import rclone_binary
 from aimemory.cloud.providers import provider_label
-from aimemory.state import write_json
+from aimemory.state import now, read_json, write_json
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,8 +75,14 @@ class RcloneCloudProvider:
             raise RuntimeError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode))
         return result.stdout
 
-    def connect(self, options: dict | None = None) -> None:
+    def connect(self, options: dict | None = None) -> dict | None:
         options = options or {}
+        if self.spec.provider == "icloud-online":
+            code = str(options.get("two_factor_code") or "").strip()
+            if code:
+                return self._continue_icloud_connect(code)
+            return self._begin_icloud_connect(options)
+
         self.config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.config.parent.chmod(0o700)
         pending = self.config.with_suffix(".pending")
@@ -91,16 +98,6 @@ class RcloneCloudProvider:
                 args.extend(["config_is_local", "true"])
             if self.spec.provider == "onedrive-online":
                 args.extend(["region", "global", "drive_type", options.get("onedrive_type") or "personal"])
-            if self.spec.provider == "icloud-online":
-                apple_id = str(options.get("apple_id") or "").strip()
-                password = str(options.get("password") or "")
-                two_factor_code = str(options.get("two_factor_code") or "").strip()
-                if not apple_id or not password:
-                    raise ValueError("Renseignez l'Apple ID et le mot de passe iCloud.")
-                obscured = self.run(["obscure", password], timeout=30, config=pending).strip()
-                args.extend(["apple_id", apple_id, "password", obscured])
-                if two_factor_code:
-                    args.extend(["config_2fa", two_factor_code])
             args.append("--no-output")
             self.run(args, timeout=300, config=pending)
             parser = configparser.ConfigParser(interpolation=None)
@@ -125,6 +122,138 @@ class RcloneCloudProvider:
             write_json(self.paths.state / "sync-status.json", {"status": "connected"})
         finally:
             pending.unlink(missing_ok=True)
+
+    @property
+    def icloud_pending_config(self) -> Path:
+        return self.config.with_suffix(".icloud-pending")
+
+    @property
+    def icloud_auth_state_path(self) -> Path:
+        return self.paths.state / "icloud-auth.json"
+
+    def pending_icloud_auth(self) -> dict:
+        state = read_json(self.icloud_auth_state_path)
+        if not state or not self.icloud_pending_config.is_file():
+            return {}
+        return state
+
+    def cancel_pending_icloud_auth(self) -> None:
+        self.icloud_pending_config.unlink(missing_ok=True)
+        self.icloud_auth_state_path.unlink(missing_ok=True)
+
+    def _begin_icloud_connect(self, options: dict) -> dict:
+        apple_id = str(options.get("apple_id") or "").strip()
+        password = str(options.get("password") or "")
+        if not apple_id or not password:
+            raise ValueError("Renseignez l'Apple ID et le mot de passe iCloud.")
+
+        self.config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.config.parent.chmod(0o700)
+        self.cancel_pending_icloud_auth()
+        pending = self.icloud_pending_config
+        if self.config.exists():
+            shutil.copy2(self.config, pending)
+        else:
+            pending.touch(mode=0o600)
+        pending.chmod(0o600)
+        try:
+            try:
+                self.run(["config", "delete", self.spec.remote_name], timeout=30, config=pending)
+            except RuntimeError:
+                pass
+            obscured = self.run(["obscure", password], timeout=30, config=pending).strip()
+            output = self.run(
+                [
+                    "config",
+                    "create",
+                    self.spec.remote_name,
+                    self.spec.backend,
+                    "service",
+                    "drive",
+                    "apple_id",
+                    apple_id,
+                    "password",
+                    obscured,
+                    "--no-obscure",
+                    "--non-interactive",
+                ],
+                timeout=300,
+                config=pending,
+            )
+            result = _config_result(output)
+            if not result.get("State"):
+                return self._finish_icloud_connect()
+            if result.get("Option", {}).get("Name") != "config_2fa":
+                raise RuntimeError("iCloud a demandé une étape d'authentification non prise en charge.")
+            auth = {
+                "status": "needs_2fa",
+                "state": result["State"],
+                "started_at": now(),
+                "message": (
+                    "Code Apple demandé. Validez la notification sur votre appareil, "
+                    "puis saisissez ce code sans relancer la connexion."
+                ),
+            }
+            write_json(self.icloud_auth_state_path, auth)
+            return auth
+        except Exception:
+            if not self.icloud_auth_state_path.exists():
+                self.cancel_pending_icloud_auth()
+            raise
+
+    def _continue_icloud_connect(self, code: str) -> dict:
+        if not re.fullmatch(r"\d{6}", code):
+            raise ValueError("Le code Apple doit contenir exactement 6 chiffres.")
+        auth = self.pending_icloud_auth()
+        state = str(auth.get("state") or "")
+        if not state:
+            self.cancel_pending_icloud_auth()
+            raise RuntimeError("La session Apple a expiré. Recommencez avec l'Apple ID et le mot de passe.")
+        output = self.run(
+            [
+                "config",
+                "update",
+                self.spec.remote_name,
+                "--continue",
+                "--state",
+                state,
+                "--result",
+                code,
+                "--non-interactive",
+            ],
+            timeout=300,
+            config=self.icloud_pending_config,
+        )
+        result = _config_result(output)
+        if result.get("State"):
+            auth.update(state=result["State"], message=result.get("Option", {}).get("Help") or auth["message"])
+            write_json(self.icloud_auth_state_path, auth)
+            return auth
+        return self._finish_icloud_connect()
+
+    def _finish_icloud_connect(self) -> dict:
+        pending = self.icloud_pending_config
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read(pending)
+        section = self.spec.remote_name
+        if not parser.has_section(section) or not parser.has_option(section, "trust_token"):
+            raise RuntimeError("iCloud n'a pas renvoyé de session de confiance.")
+        pending.chmod(0o600)
+        self.run(["mkdir", self.spec.remote], config=pending)
+        os.replace(pending, self.config)
+        self.icloud_auth_state_path.unlink(missing_ok=True)
+        write_json(
+            self.paths.state / "cloud.json",
+            {
+                "provider": self.spec.provider,
+                "root": "AI-Memory",
+                "remote": self.spec.remote_name,
+                "mode": "online",
+                "connection_id": uuid.uuid4().hex,
+            },
+        )
+        write_json(self.paths.state / "sync-status.json", {"status": "connected"})
+        return {"status": "connected", "message": "iCloud Drive est connecté."}
 
     def exchange(self, local: Path, progress) -> None:
         for source, destination, phase in ((str(local), self.spec.remote, "uploading"), (self.spec.remote, str(local), "downloading")):
@@ -188,11 +317,24 @@ class RcloneCloudProvider:
                     process.communicate()
 
     def disconnect(self) -> None:
+        self.cancel_pending_icloud_auth()
         try:
             self.run(["config", "delete", self.spec.remote_name], timeout=30)
         except RuntimeError:
             pass
         (self.paths.state / "cloud.json").unlink(missing_ok=True)
+
+
+def _config_result(output: str) -> dict:
+    try:
+        result = json.loads(output or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Réponse d'authentification iCloud illisible.") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("Réponse d'authentification iCloud invalide.")
+    if result.get("Error"):
+        raise RuntimeError(str(result["Error"]))
+    return result
 
 
 def _friendly_rclone_error(provider: str, output: str | bytes | None, code: int) -> str:

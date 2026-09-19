@@ -55,7 +55,8 @@ class DesktopState:
         def work():
             try:
                 result = operation()
-                self.job = {"running": False, "message": f"{name} : termine.", "result": result}
+                message = result.get("message") if isinstance(result, dict) else None
+                self.job = {"running": False, "message": message or f"{name} : termine.", "result": result}
             except Exception as exc:
                 self.job = {"running": False, "message": str(exc), "error": True}
         threading.Thread(target=work, daemon=True).start()
@@ -88,6 +89,9 @@ class Handler(BaseHTTPRequestHandler):
             except Timeout:
                 status["sync_active"] = True
             status["recent_conversations"] = self.state.service.list_conversations(limit=25)
+            status["icloud_auth"] = RcloneCloudProvider.for_provider(
+                self.state.service.paths, "icloud-online"
+            ).pending_icloud_auth()
             self._send_json(status)
             return
         if self.path == "/api/identity":
@@ -130,6 +134,9 @@ class Handler(BaseHTTPRequestHandler):
             provider = self.body.get("provider")
             folder = self.body.get("folder", "")
             def connect():
+                continuing_icloud = provider == "icloud-online" and bool(self.body.get("icloud_2fa"))
+                if not continuing_icloud:
+                    _pull_current_destination(self.state.service)
                 if provider == "google-drive":
                     with _cloud_config_lock(self.state.service):
                         GoogleDriveProvider(self.state.service.paths).connect(self.body.get("oauth_client"))
@@ -141,7 +148,9 @@ class Handler(BaseHTTPRequestHandler):
                         "onedrive_type": self.body.get("onedrive_type"),
                     }
                     with _cloud_config_lock(self.state.service):
-                        RcloneCloudProvider.for_provider(self.state.service.paths, provider).connect(options)
+                        result = RcloneCloudProvider.for_provider(self.state.service.paths, provider).connect(options)
+                    if result and result.get("status") == "needs_2fa":
+                        return result
                 elif provider in LOCAL_FOLDER_PROVIDERS:
                     root = resolve_folder_root(provider, folder)
                     validate_sync_root(root, self.state.service.paths.home)
@@ -334,6 +343,24 @@ def _cloud_config_lock(service: MemoryService):
         yield
     finally:
         lock.release()
+
+
+def _pull_current_destination(service: MemoryService) -> dict:
+    if not read_json(service.paths.state / "cloud.json"):
+        return {"status": "not-configured"}
+    try:
+        return service.pull_cloud_now()
+    except Timeout:
+        cancel_active_sync(service.paths)
+        lock = FileLock(str(service.paths.state / "sync.lock"), timeout=20)
+        try:
+            with lock:
+                pass
+        except Timeout:
+            raise ValueError(
+                "La synchronisation actuelle ne s'arrête pas. Réessayez dans quelques secondes."
+            ) from None
+        return service.pull_cloud_now()
 
 
 def main(background: bool = False) -> int:

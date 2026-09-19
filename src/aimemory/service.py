@@ -139,6 +139,10 @@ class MemoryService:
         from aimemory.sync.cloud_sync import CloudSync
         return CloudSync(self).run()
 
+    def pull_cloud_now(self) -> dict:
+        from aimemory.sync.cloud_sync import CloudSync
+        return CloudSync(self).run(pull_only=True)
+
     def index_archive(self, path: Path) -> NormalizedConversation:
         conversation = self.archive.read(path)
         self.db.upsert_conversation(conversation, archive_path=path)

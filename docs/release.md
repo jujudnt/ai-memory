@@ -45,6 +45,8 @@ V0.4.3 turns iCloud Drive online setup into a two-step Apple 2FA flow, installs 
 
 V0.4.4 fixes the real asynchronous Apple 2FA flow: once iCloud asks for validation, the open settings panel reveals the code field and changes the action to **Confirmer le code iCloud**. It also replaces the persistent full transfer cache with object-by-object synchronization, removes raw originals and historical revisions from the Mac only after their cloud writes succeed, preserves the local searchable conversation set, and resets cloud confirmation when the destination account changes.
 
+V0.4.5 preserves rclone's pending Apple authentication session between the password and 2FA steps. Confirming the six-digit code now resumes that session instead of triggering a second Apple login notification. The credentials fields are hidden and cleared while confirmation is pending. Before switching accounts or providers, AI Memory also performs a download-only pass against the old destination, then uploads the consolidated current conversation set to the new destination; a full old account therefore does not block migration. Connector tests cover Google Drive, Dropbox, OneDrive, iCloud Drive, local cloud folders, and old-to-new destination migration.
+
 ## macOS Gatekeeper
 
 The macOS build is ad-hoc signed, but it is not notarized with an Apple Developer ID yet. macOS may still show an unidentified developer or malware-verification warning after download.

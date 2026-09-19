@@ -122,9 +122,12 @@ def test_desktop_assets_explain_multi_client_mcp_and_two_step_icloud():
     script = Path("src/aimemory/assets/desktop.js").read_text(encoding="utf-8")
 
     assert "MCP pour Codex et Claude" in html
+    assert 'id="icloud-credentials"' in html
     assert 'id="icloud-2fa-label"' in html
     assert "icloudAwaiting2FA" in script
+    assert 'data.icloud_auth?.status === "needs_2fa"' in script
     assert "isIcloud2FAError(data.job.message)" in script
     assert "revealIcloud2FA()" in script
+    assert '$("#icloud-credentials").hidden' in script
     assert "Confirmer le code iCloud" in script
     assert "VS Code" in script
