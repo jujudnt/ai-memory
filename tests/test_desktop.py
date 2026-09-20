@@ -133,7 +133,6 @@ def test_desktop_assets_explain_multi_client_mcp_and_two_step_icloud():
     assert 'data.icloud_auth?.status === "needs_2fa"' in script
     assert 'data.icloud_auth?.status === "needs_web_approval"' in script
     assert 'data.icloud_auth?.status === "needs_terms_acceptance"' in script
-    assert "isIcloud2FAError(data.job.message)" in script
     assert "revealIcloud2FA()" in script
     assert '$("#icloud-credentials").hidden' in script
     assert "Confirmer le code iCloud" in script

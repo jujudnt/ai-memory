@@ -13,6 +13,7 @@ from filelock import FileLock
 from aimemory.cloud.google_drive import rclone_binary
 from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, validate_sync_root
 from aimemory.cloud.rclone_provider import RcloneCloudProvider
+from aimemory.cloud.destination import remote_path
 from aimemory.archive.raw_backup import RAW_PATTERN, read_raw
 from aimemory.state import atomic_write, now, read_json, write_json
 
@@ -34,7 +35,8 @@ class CloudSync:
             if not config:
                 return {"status": "not-configured"}
             status = read_json(self.status_path)
-            status.update(status="preparing", started_at=now(), error=None)
+            status.update(status="preparing", started_at=now(), error=None, requires_action=False,
+                          transfers=0, totalTransfers=0, bytes=0, totalBytes=0, speed=0)
             def progress(phase, **details):
                 check_cancelled(self.paths)
                 status.update(status=phase, heartbeat_at=now(), **details)
@@ -53,7 +55,7 @@ class CloudSync:
                 local_objects = list(
                     _iter_local_objects(
                         self.paths.archive,
-                        include_current_sources=destination_changed,
+                        include_current_sources=True,
                     )
                 )
                 uploads = [] if pull_only else [
@@ -63,10 +65,12 @@ class CloudSync:
                     _ensure_available_space_for_files((path for _, path in uploads), remote.root)
                 for index, (relative, path) in enumerate(uploads, start=1):
                     check_cancelled(self.paths)
-                    progress("uploading", object_count=len(remote_objects) + index, transfers=index, totalTransfers=len(uploads))
+                    progress("uploading", object_count=len(remote_objects), transfers=index - 1, totalTransfers=len(uploads))
                     remote.upload(path, relative)
                     remote_objects.add(relative)
                     known[relative] = True
+                    progress("uploading", object_count=len(remote_objects), transfers=index,
+                             totalTransfers=len(uploads))
                 if not uploads:
                     progress("uploading", object_count=len(remote_objects))
                 progress("verifying")
@@ -79,7 +83,7 @@ class CloudSync:
                     relative = Path(relative_string)
                     if not _allowed_object(relative_string):
                         raise ValueError("Unexpected object in cloud archive")
-                    progress("downloading", object_count=len(known), transfers=index, totalTransfers=len(downloads))
+                    progress("downloading", object_count=len(known), transfers=index - 1, totalTransfers=len(downloads))
                     path = incoming / relative
                     remote.download(relative_string, path)
                     payload = path.read_bytes()
@@ -111,6 +115,7 @@ class CloudSync:
                     if not target.exists():
                         atomic_write(target, payload)
                     known[relative_string] = True
+                    progress("downloading", object_count=len(known), transfers=index, totalTransfers=len(downloads))
                     if len(known) % 10 == 0:
                         progress("verifying", object_count=len(known))
                 for relative_string, _ in local_objects:
@@ -123,6 +128,9 @@ class CloudSync:
                               object_count=len(remote_objects), retention=retention, error=None)
             except Exception as exc:
                 status.update(status="error", error=str(exc), failed_at=now())
+                # A background retry must not repeatedly prompt the user's Apple devices.
+                if config.get("provider") == "icloud-online":
+                    status["requires_action"] = True
                 raise
             finally:
                 shutil.rmtree(self.paths.cache / "incoming", ignore_errors=True)
@@ -239,36 +247,32 @@ def _prune_empty_parents(path: Path, stop: Path) -> None:
 
 def _iter_local_objects(archive: Path, include_current_sources: bool = False):
     seen: set[str] = set()
+    # Send one immutable current revision per conversation before its history.
+    if include_current_sources:
+        for path in sorted((archive / "sources").rglob("*.json.*")):
+            if not path.is_file() or path.is_symlink() or path.name.startswith("."):
+                continue
+            suffix = ".json.zst" if path.name.endswith(".json.zst") else ".json.gz"
+            conversation_id = path.name.removesuffix(suffix)
+            if not re.fullmatch(r"[a-zA-Z0-9_-]+", conversation_id):
+                raise ValueError("Unexpected current conversation archive")
+            payload = path.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            relative = f"snapshots/{conversation_id}/{digest}{suffix}"
+            target = archive / relative
+            if not target.exists():
+                atomic_write(target, payload)
+            seen.add(relative)
+            yield relative, target
     for category in ("snapshots", "raw"):
         for path in sorted((archive / category).rglob("*")):
             if path.is_file() and not path.is_symlink() and not path.name.startswith("."):
                 relative = path.relative_to(archive).as_posix()
                 if not _allowed_object(relative):
                     raise ValueError("Unexpected object in local archive")
-                seen.add(relative)
-                yield relative, path
-    if not include_current_sources:
-        return
-    for path in sorted((archive / "sources").rglob("*.json.*")):
-        if not path.is_file() or path.is_symlink() or path.name.startswith("."):
-            continue
-        suffix = ".json.zst" if path.name.endswith(".json.zst") else ".json.gz"
-        conversation_id = path.name.removesuffix(suffix)
-        if not re.fullmatch(r"[a-zA-Z0-9_-]+", conversation_id):
-            raise ValueError("Unexpected current conversation archive")
-        digest = _file_sha256(path)
-        relative = f"snapshots/{conversation_id}/{digest}{suffix}"
-        if relative not in seen:
-            seen.add(relative)
-            yield relative, path
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+                if relative not in seen:
+                    seen.add(relative)
+                    yield relative, path
 
 
 def _hydrate_raw_dependencies(
@@ -312,10 +316,9 @@ def _remote_identity(config: dict) -> str:
 def _remote_archive(paths, config: dict):
     provider = config["provider"]
     if provider == "google-drive":
-        return RcloneArchiveRemote(paths, "google-drive", "aimemory:AI-Memory")
+        return RcloneArchiveRemote(paths, "google-drive", remote_path(config))
     if provider in RCLONE_DIRECT_PROVIDERS:
-        rclone = RcloneCloudProvider.for_provider(paths, provider)
-        return RcloneArchiveRemote(paths, provider, rclone.spec.remote)
+        return RcloneArchiveRemote(paths, provider, remote_path(config))
     if provider in LOCAL_FOLDER_PROVIDERS:
         root = Path(config["root"]).expanduser().resolve()
         validate_sync_root(root, paths.home)
@@ -373,6 +376,8 @@ class RcloneArchiveRemote:
                 rclone_binary(),
                 "--config",
                 str(self.config),
+                "--cache-dir",
+                str(self.paths.cache / "rclone"),
                 "--contimeout",
                 "15s",
                 "--timeout",

@@ -27,8 +27,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: python -m pip install -e ".[dev,desktop]"
+      - run: npm ci
       - run: pytest -q
+      - run: npm test
       - run: python scripts/fetch_rclone.py
       - name: Build macOS app
         if: runner.os == 'macOS'

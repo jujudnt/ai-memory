@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from aimemory.service import MemoryService
-from aimemory.state import write_json
+from aimemory.state import read_json, write_json
 from filelock import FileLock, Timeout
 
 
@@ -86,6 +86,8 @@ class WatcherService:
         self._write_status()
         # Cloud failures do not erase the collector's independent health signal.
         thread = getattr(self, "_sync_thread", None)
+        if read_json(self.service.paths.state / "sync-status.json").get("requires_action"):
+            return
         if (thread is None or not thread.is_alive()) and time.monotonic() - getattr(self, "_last_sync", -60) >= 60:
             self._last_sync = time.monotonic()
             def synchronize():

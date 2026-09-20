@@ -71,21 +71,6 @@ const icloudWebApprovalMessage =
   "Le code est accept\u00e9. Activez Acc\u00e8s aux donn\u00e9es iCloud sur le Web dans R\u00e9glages > compte Apple > iCloud, approuvez la demande Apple \u00e9ventuelle, puis cliquez sur R\u00e9essayer iCloud.";
 const icloudTermsMessage =
   "Le code est accept\u00e9, mais Apple n'a ouvert qu'une session partielle. Ouvrez iCloud.com, connectez-vous et acceptez les nouvelles conditions iCloud \u00e9ventuelles. Revenez ensuite ici et cliquez sur J'ai accept\u00e9, relancer.";
-function isIcloud2FAError(message = "") {
-  return /iCloud Drive attend|2FA|code de validation Apple|code Apple|two-factor|verification/i.test(
-    message,
-  );
-}
-function isIcloudWebApprovalError(message = "") {
-  return /Protection avancée|Accès aux données iCloud sur le Web|X-APPLE-WEBAUTH-TOKEN|PCS/i.test(
-    message,
-  );
-}
-function isIcloudTermsError(message = "") {
-  return /conditions iCloud|session iCloud partielle|termsUpdateNeeded/i.test(
-    message,
-  );
-}
 function revealIcloud2FA() {
   if ($("#provider").value !== "icloud-online") return;
   const wasWaiting = icloudAwaiting2FA;
@@ -247,16 +232,23 @@ function render(data) {
     : "Aucun compte connect\u00e9";
   if (configured && sync.status === "synced")
     cloudText += ` \u00b7 ${elapsed(sync.last_success_at)}`;
-  else if (configured && data.sync_active)
-    cloudText += ` \u00b7 ${size(sync.bytes)} / ${size(sync.totalBytes)} \u00b7 ${size(sync.speed)}/s`;
+  else if (configured && data.sync_active) {
+    if (sync.totalTransfers > 0)
+      cloudText += ` \u00b7 ${sync.transfers || 0} / ${sync.totalTransfers} fichiers`;
+    else if (sync.totalBytes > 0)
+      cloudText += ` \u00b7 ${size(sync.bytes)} / ${size(sync.totalBytes)} \u00b7 ${size(sync.speed)}/s`;
+  }
   else if (configured && sync.status !== "error" && sync.status !== "synced")
     cloudText = "En attente de synchronisation";
   if (sync.error && configured) cloudText += ` : ${sync.error}`;
+  if (sync.requires_action) cloudText += " Relance manuelle requise.";
   if (data.sync_active && age(sync.heartbeat_at || sync.started_at) > 180)
     cloudText = `Synchronisation \u00e0 v\u00e9rifier \u00b7 derni\u00e8re activit\u00e9 ${elapsed(sync.heartbeat_at || sync.started_at)}`;
   $("#cloud-detail").textContent = cloudText;
   $("#cloud-progress").hidden = !configured || !data.sync_active;
-  if (sync.totalBytes > 0)
+  if (sync.totalTransfers > 0)
+    $("#cloud-progress").value = Math.min(100, 100 * (sync.transfers || 0) / sync.totalTransfers);
+  else if (sync.totalBytes > 0)
     $("#cloud-progress").value = Math.min(
       100,
       (100 * (sync.bytes || 0)) / sync.totalBytes,
@@ -266,6 +258,15 @@ function render(data) {
   $('[data-action="sync"]').hidden = !configured;
   $("#cloud-connect-form").hidden = configured && !switchingCloud;
   $("#cloud-manage").hidden = !configured;
+  $("#cloud-folder-settings").hidden = !configured;
+  if (document.activeElement !== $("#cloud-folder") &&
+      $("#cloud-folder").dataset.saved !== storage.remote) {
+    $("#cloud-folder").value = storage.remote || "AI-Memory";
+    $("#cloud-folder").dataset.saved = storage.remote || "AI-Memory";
+  }
+  $("#cloud-folder-help").textContent = storage.provider === "google-drive"
+    ? "Chemin dans Google Drive. Avec l'autorisation actuelle, seuls les dossiers accessibles \u00e0 AI Memory sont utilisables."
+    : "Les sauvegardes existantes restent dans l'ancien dossier. La copie vers le nouveau dossier est automatique.";
   $("#cloud-summary").textContent = configured
     ? `${provider} \u00b7 ${storage.remote}`
     : "Aucune destination connect\u00e9e";
@@ -304,30 +305,28 @@ function render(data) {
       row.updated_at || row.created_at || "";
     list.append(item);
   }
-  const pendingIcloud =
-    data.icloud_auth?.status === "needs_2fa" ||
-    data.job?.result?.status === "needs_2fa";
-  const pendingIcloudWebApproval =
-    data.icloud_auth?.status === "needs_web_approval" ||
-    data.job?.result?.status === "needs_web_approval";
-  const pendingIcloudTerms =
-    data.icloud_auth?.status === "needs_terms_acceptance" ||
-    data.job?.result?.status === "needs_terms_acceptance";
+  const pendingIcloud = data.icloud_auth?.status === "needs_2fa";
+  const pendingIcloudWebApproval = data.icloud_auth?.status === "needs_web_approval";
+  const pendingIcloudTerms = data.icloud_auth?.status === "needs_terms_acceptance";
+  if (data.icloud_auth?.status === "checking_access") {
+    icloudAwaiting2FA = icloudAwaitingWebApproval = icloudAwaitingTerms = false;
+    notice(data.icloud_auth.message);
+  }
   if (
-    (icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms) &&
+    (switchingCloud || icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms) &&
     !pendingIcloud &&
     !pendingIcloudWebApproval &&
     !pendingIcloudTerms &&
-    configured &&
-    storage.provider === "icloud-online" &&
-    !data.job?.running &&
-    !data.job?.error
+    !data.icloud_auth?.status && configured &&
+    storage.provider === "icloud-online"
   ) {
     icloudAwaiting2FA = false;
     icloudAwaitingWebApproval = false;
     icloudAwaitingTerms = false;
     switchingCloud = false;
     $("#icloud-2fa").value = "";
+    notice("iCloud connect\u00e9. La sauvegarde poss\u00e8de son propre suivi ci-dessus.");
+    $("#cloud-connect-form").hidden = true;
   }
   if (pendingIcloudTerms && !icloudAwaitingTerms) {
     $("#provider").value = "icloud-online";
@@ -337,15 +336,6 @@ function render(data) {
     revealIcloudWebApproval();
   } else if (pendingIcloud && !icloudAwaiting2FA) {
     $("#provider").value = "icloud-online";
-    revealIcloud2FA();
-  } else if (
-    data.job?.error &&
-    $("#provider").value === "icloud-online" &&
-    isIcloud2FAError(data.job.message) &&
-    !icloudAwaiting2FA &&
-    !icloudAwaitingWebApproval &&
-    !icloudAwaitingTerms
-  ) {
     revealIcloud2FA();
   } else if (data.job?.message && data.job.message !== lastJobMessage) {
     lastJobMessage = data.job.message;
@@ -372,6 +362,7 @@ async function refresh() {
   }
 }
 async function action(name, body = {}) {
+  if (requestBusy || current?.job?.running) return;
   requestBusy = true;
   busy();
   notice("Op\u00e9ration en cours\u2026");
@@ -396,6 +387,7 @@ async function action(name, body = {}) {
         onedrive_type: $("#onedrive-type").value,
       };
     }
+    if (name === "cloud-folder") body = {folder: $("#cloud-folder").value};
     const res = await fetch(`/api/${name}`, {
       method: "POST",
       headers: {
@@ -414,30 +406,15 @@ async function action(name, body = {}) {
       icloudAwaitingWebApproval = false;
     if (name === "connect-cloud" || name === "disconnect-cloud")
       icloudAwaitingTerms = false;
+    if (name === "reset-icloud") {
+      icloudAwaiting2FA = icloudAwaitingWebApproval = icloudAwaitingTerms = false;
+      $("#icloud-password").value = $("#icloud-apple-id").value = $("#icloud-2fa").value = "";
+      switchingCloud = true;
+    }
     notice(data.message);
     await refresh();
   } catch (error) {
-    const wantsIcloudWebApproval =
-      name === "connect-cloud" &&
-      $("#provider").value === "icloud-online" &&
-      isIcloudWebApprovalError(error.message);
-    const wantsIcloudTerms =
-      name === "connect-cloud" &&
-      $("#provider").value === "icloud-online" &&
-      isIcloudTermsError(error.message);
-    const wantsIcloudCode =
-      name === "connect-cloud" &&
-      $("#provider").value === "icloud-online" &&
-      isIcloud2FAError(error.message);
-    if (wantsIcloudTerms) {
-      revealIcloudTerms();
-    } else if (wantsIcloudWebApproval) {
-      revealIcloudWebApproval();
-    } else if (wantsIcloudCode) {
-      revealIcloud2FA();
-    } else {
-      notice(error.message, true);
-    }
+    notice(error.message, true);
   } finally {
     requestBusy = false;
     busy();
@@ -470,9 +447,11 @@ function updateProviderFields() {
   $("#folder-label").hidden = !customFolder;
   $("#oauth-settings").hidden = !google;
   $("#icloud-fields").hidden = !icloudOnline;
+  $("#icloud-reset").hidden = !icloudOnline;
+  const checking = current?.icloud_auth?.status === "checking_access";
   $("#icloud-credentials").hidden =
     icloudOnline &&
-    (icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms);
+    (checking || icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms);
   $("#icloud-2fa-label").hidden = !icloudOnline || !icloudAwaiting2FA;
   $("#icloud-web-approval").hidden =
     !icloudOnline || !icloudAwaitingWebApproval;
@@ -485,6 +464,8 @@ function updateProviderFields() {
   $('[data-action="connect-cloud"]').textContent =
     icloudOnline && icloudAwaitingTerms
       ? "J'ai accept\u00e9, relancer"
+      : icloudOnline && checking
+      ? "V\u00e9rification de l'acc\u00e8s iCloud"
       : icloudOnline && icloudAwaitingWebApproval
       ? "R\u00e9essayer iCloud"
       : icloudOnline && icloudAwaiting2FA

@@ -73,7 +73,7 @@ def test_google_quota_errors_are_actionable():
 def test_icloud_auth_errors_explain_2fa_code():
     message = _friendly_rclone_error("icloud-online", "unauthorized: two-factor verification required", 1)
 
-    assert "code 2FA" in message
+    assert "six chiffres" in message
     assert "pas un mot de passe spécifique d'app" in message
 
 
@@ -217,8 +217,7 @@ def test_icloud_keeps_trusted_session_while_waiting_for_web_approval(tmp_path, m
     monkeypatch.setattr(provider, "run", run)
 
     pending = provider.pending_icloud_auth()
-    assert pending["status"] == "needs_web_approval"
-    assert "Accès aux données iCloud sur le Web" in pending["message"]
+    assert pending["status"] == "needs_2fa"
 
     still_pending = provider.connect({"resume_after_approval": True})
     assert still_pending["status"] == "needs_web_approval"
@@ -230,7 +229,7 @@ def test_icloud_keeps_trusted_session_while_waiting_for_web_approval(tmp_path, m
     assert not provider.icloud_auth_state_path.exists()
 
 
-def test_icloud_upgrades_missing_web_token_session_to_pending_terms(tmp_path):
+def test_reading_status_does_not_infer_terms_from_missing_cookie(tmp_path):
     provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
     provider.icloud_pending_config.parent.mkdir(parents=True, exist_ok=True)
     provider.icloud_pending_config.write_text(
@@ -250,8 +249,7 @@ def test_icloud_upgrades_missing_web_token_session_to_pending_terms(tmp_path):
 
     pending = provider.pending_icloud_auth()
 
-    assert pending["status"] == "needs_terms_acceptance"
-    assert "icloud.com" in pending["message"]
+    assert pending["status"] == "needs_web_approval"
 
 
 def test_icloud_restarts_auth_with_saved_obscured_password_after_terms(tmp_path, monkeypatch):
@@ -344,5 +342,34 @@ def test_browser_cloud_connectors_create_a_tokenized_remote(tmp_path, monkeypatc
 def test_icloud_code_without_a_pending_session_is_rejected(tmp_path):
     provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
 
-    with pytest.raises(RuntimeError, match="session Apple"):
+    with pytest.raises(ValueError, match="Aucun code Apple"):
         provider.connect({"two_factor_code": "123456"})
+
+
+def test_reset_icloud_removes_credentials_but_preserves_other_accounts(tmp_path):
+    provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
+    provider.config.parent.mkdir(parents=True)
+    provider.config.write_text('[aimemory]\ntype=drive\ntoken=keep\n[aimemory-icloud]\npassword=erase\ncookies=erase\n')
+    provider.icloud_pending_config.write_text('password=erase')
+    provider.icloud_auth_state_path.write_text('{"status":"needs_2fa"}')
+    (provider.paths.state / 'cloud.json').write_text('{"provider":"icloud-online"}')
+    provider.reset_icloud()
+    assert 'keep' in provider.config.read_text()
+    assert 'erase' not in provider.config.read_text()
+    assert not provider.icloud_pending_config.exists()
+    assert provider.pending_icloud_auth() == {}
+    assert not (provider.paths.state / 'cloud.json').exists()
+
+
+@pytest.mark.parametrize('provider,remote', [('google-drive','aimemory'), ('icloud-online','aimemory-icloud'), ('dropbox-online','aimemory-dropbox'), ('onedrive-online','aimemory-onedrive')])
+def test_selected_cloud_folder_is_used_for_transfers(tmp_path, provider, remote):
+    from aimemory.sync.cloud_sync import _remote_archive
+    result = _remote_archive(paths(tmp_path), {'provider':provider, 'root':'Sauvegardes/Mes conversations'})
+    assert result.remote == f'{remote}:Sauvegardes/Mes conversations'
+
+
+@pytest.mark.parametrize('folder', ['', '/', '../elsewhere', 'one/../two', 'a:b', 'a\\b', 'a//b'])
+def test_invalid_cloud_folder_is_rejected(folder):
+    from aimemory.cloud.destination import cloud_folder
+    with pytest.raises(ValueError):
+        cloud_folder(folder)

@@ -30,6 +30,7 @@ from aimemory.service import MemoryService
 from aimemory.cloud.google_drive import GoogleDriveProvider
 from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, resolve_folder_root, validate_sync_root
 from aimemory.cloud.rclone_provider import RcloneCloudProvider
+from aimemory.cloud.destination import cloud_folder, remote_path
 from aimemory.sync.cloud_sync import cancel_active_sync
 from aimemory.state import read_json, write_json
 from aimemory.health import watcher_health
@@ -122,6 +123,42 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"message": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def _post(self) -> None:
+        if self.path == "/api/cloud-folder":
+            folder = str(self.body.get("folder") or "")
+            config = read_json(self.state.service.paths.state / "cloud.json")
+            if not config:
+                raise ValueError("Connectez d'abord un compte cloud.")
+            online = config["provider"] in RCLONE_DIRECT_PROVIDERS or config["provider"] == "google-drive"
+            if online:
+                folder = cloud_folder(folder)
+            else:
+                root = Path(folder).expanduser().resolve()
+                validate_sync_root(root, self.state.service.paths.home)
+                folder = str(root)
+            def change_folder():
+                _pull_current_destination(self.state.service)
+                with _cloud_config_lock(self.state.service):
+                    updated = dict(config, root=folder, connection_id=uuid.uuid4().hex)
+                    if online:
+                        provider = (GoogleDriveProvider(self.state.service.paths)
+                                    if config["provider"] == "google-drive" else
+                                    RcloneCloudProvider.for_provider(self.state.service.paths, config["provider"]))
+                        provider.run(["mkdir", remote_path(updated)])
+                    else:
+                        Path(folder).mkdir(parents=True, exist_ok=True)
+                    write_json(self.state.service.paths.state / "cloud.json", updated)
+                    write_json(self.state.service.paths.state / "sync-status.json", {"status": "connected"})
+                return self.state.service.sync_now()
+            self._send_json(self.state.start_job("Changement de dossier et synchronisation", change_folder))
+            return
+        if self.path == "/api/reset-icloud":
+            if self.state.job.get("running"):
+                raise ValueError("Attendez la fin de l'opération en cours avant de recommencer.")
+            with _cloud_config_lock(self.state.service):
+                RcloneCloudProvider.for_provider(self.state.service.paths, "icloud-online").reset_icloud()
+            self.state.job = {}
+            self._send_json({"message": "Identifiants et session iCloud effacés. Vous pouvez recommencer."})
+            return
         if self.path == "/api/menubar-login":
             from aimemory.menubar import set_login_enabled
             enabled = self.body.get("enabled")

@@ -74,6 +74,8 @@ class RcloneCloudProvider:
                     rclone_binary(),
                     "--config",
                     str(config or self.config),
+                    "--cache-dir",
+                    str(self.paths.cache / "rclone"),
                     "--contimeout",
                     "15s",
                     "--timeout",
@@ -163,16 +165,24 @@ class RcloneCloudProvider:
         state = read_json(self.icloud_auth_state_path)
         if not state or not self.icloud_pending_config.is_file():
             return {}
-        if self._icloud_session_is_trusted():
-            if self._icloud_session_missing_web_token():
-                state = self._set_icloud_terms_acceptance(state)
-            elif state.get("status") == "needs_2fa":
-                state = self._set_icloud_web_approval(state)
         return state
 
     def cancel_pending_icloud_auth(self) -> None:
         self.icloud_pending_config.unlink(missing_ok=True)
         self.icloud_auth_state_path.unlink(missing_ok=True)
+
+    def reset_icloud(self) -> None:
+        self.cancel_pending_icloud_auth()
+        shutil.rmtree(self.paths.cache / "rclone", ignore_errors=True)
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read(self.config)
+        if parser.remove_section(self.spec.remote_name):
+            with self.config.open("w", encoding="utf-8") as stream:
+                parser.write(stream)
+            self.config.chmod(0o600)
+        if read_json(self.paths.state / "cloud.json").get("provider") == "icloud-online":
+            (self.paths.state / "cloud.json").unlink(missing_ok=True)
+            write_json(self.paths.state / "sync-status.json", {"status": "disconnected"})
 
     def _icloud_session_is_trusted(self) -> bool:
         parser = configparser.ConfigParser(interpolation=None)
@@ -183,12 +193,6 @@ class RcloneCloudProvider:
             and bool(parser.get(section, "trust_token", fallback=""))
             and not parser.get(section, "_auth_session", fallback="")
         )
-
-    def _icloud_session_missing_web_token(self) -> bool:
-        parser = configparser.ConfigParser(interpolation=None)
-        parser.read(self.icloud_pending_config)
-        cookies = parser.get(self.spec.remote_name, "cookies", fallback="")
-        return bool(cookies) and "X-APPLE-WEBAUTH-TOKEN" not in cookies.upper()
 
     def _set_icloud_web_approval(self, previous: dict | None = None) -> dict:
         state = {
@@ -300,6 +304,8 @@ class RcloneCloudProvider:
         if not re.fullmatch(r"\d{6}", code):
             raise ValueError("Le code Apple doit contenir exactement 6 chiffres.")
         auth = self.pending_icloud_auth()
+        if auth.get("status") != "needs_2fa":
+            raise ValueError("Aucun code Apple n'est attendu. Recommencez la connexion si nécessaire.")
         state = str(auth.get("state") or "")
         if not state:
             self.cancel_pending_icloud_auth()
@@ -342,6 +348,10 @@ class RcloneCloudProvider:
         section = self.spec.remote_name
         if not self._icloud_session_is_trusted():
             raise RuntimeError("iCloud n'a pas renvoyé de session de confiance.")
+        write_json(self.icloud_auth_state_path, {
+            "status": "checking_access",
+            "message": "Code validé. Vérification de l'accès à iCloud Drive ; Apple peut demander une autorisation supplémentaire sur votre appareil.",
+        })
         pending.chmod(0o600)
         try:
             self.run(["mkdir", self.spec.remote], config=pending)
@@ -349,6 +359,12 @@ class RcloneCloudProvider:
             return self._set_icloud_terms_acceptance(read_json(self.icloud_auth_state_path))
         except ICloudWebApprovalRequired:
             return self._set_icloud_web_approval(read_json(self.icloud_auth_state_path))
+        except Exception:
+            write_json(self.icloud_auth_state_path, {
+                "status": "access_failed",
+                "message": "L'accès à iCloud Drive n'a pas pu être vérifié. Recommencez la connexion.",
+            })
+            raise
         os.replace(pending, self.config)
         self.icloud_auth_state_path.unlink(missing_ok=True)
         write_json(
@@ -472,9 +488,9 @@ def _friendly_rclone_error(provider: str, output: str | bytes | None, code: int)
             return ICLOUD_WEB_APPROVAL_MESSAGE
         if any(marker in lowered for marker in ("2fa", "two-factor", "verification", "mfa", "auth", "unauthorized", "forbidden")):
             return (
-                "iCloud Drive attend le code de validation Apple. Saisissez le code 2FA affiché sur votre iPhone "
-                "dans le champ Code 2FA Apple, puis reconnectez. Utilisez le mot de passe Apple ID normal, pas un "
-                "mot de passe spécifique d'app."
+                "La vérification Apple a échoué ou la session a expiré. "
+                "Si un code est attendu, vérifiez les six chiffres. Sinon, recommencez la connexion iCloud. "
+                "Utilisez le mot de passe Apple ID normal, pas un mot de passe spécifique d'app."
             )
     if any(marker in lowered for marker in ("insufficient storage", "not enough space", "quota", "storage full", "drive is full")):
         return f"{name} est plein. Libérez de l'espace ou changez de destination cloud."

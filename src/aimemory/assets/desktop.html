@@ -122,7 +122,7 @@
       </section>
       <footer>
         <span><span class="tiny-dot"></span> Stockage local</span
-        ><span id="footer-size"></span><span>v0.4.7</span>
+        ><span id="footer-size"></span><span>v0.4.8</span>
       </footer>
     </main>
     <dialog id="settings" aria-labelledby="settings-title">
@@ -178,6 +178,12 @@
         <section class="setting-section">
           <h3>Sauvegarde cloud</h3>
           <p id="cloud-summary" class="muted"></p>
+          <div id="cloud-folder-settings" hidden>
+            <label for="cloud-folder">Dossier de sauvegarde</label>
+            <input id="cloud-folder" placeholder="Sauvegardes/AI-Memory" />
+            <button class="compact" data-action="cloud-folder">Utiliser ce dossier</button>
+            <p id="cloud-folder-help" class="muted small"></p>
+          </div>
           <div id="cloud-connect-form">
             <label for="provider">Destination</label
             ><select id="provider">
@@ -233,7 +239,7 @@
                 </p>
               </div>
               <div id="icloud-terms" class="icloud-approval" hidden>
-                <strong>Conditions iCloud requises</strong>
+                <strong>Session Apple incompl&egrave;te</strong>
                 <p>
                   Apple a accept&eacute; le code mais n'a ouvert qu'une session
                   partielle. Connectez-vous &agrave; iCloud.com et acceptez les
@@ -256,6 +262,7 @@
                 connect&eacute; &agrave; macOS, choisissez iCloud Drive du Mac.
               </p>
             </div>
+            <button class="compact" data-action="reset-icloud" id="icloud-reset" hidden>Effacer la connexion iCloud et recommencer</button>
             <label id="folder-label" hidden
               >Chemin du dossier<input
                 id="folder"
