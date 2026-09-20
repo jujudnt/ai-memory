@@ -8,6 +8,7 @@ import pytest
 
 from aimemory.cloud.google_drive import GoogleDriveProvider, _friendly_google_error, rclone_binary
 from aimemory.cloud.rclone_provider import (
+    ICloudTermsAcceptanceRequired,
     ICloudWebApprovalRequired,
     RcloneCloudProvider,
     _friendly_rclone_error,
@@ -76,7 +77,7 @@ def test_icloud_auth_errors_explain_2fa_code():
     assert "pas un mot de passe spécifique d'app" in message
 
 
-def test_icloud_pcs_errors_explain_advanced_data_protection():
+def test_icloud_missing_web_token_explains_pending_terms():
     message = _friendly_rclone_error(
         "icloud-online",
         'requestPCS(iclouddrive): Missing X-APPLE-WEBAUTH-TOKEN cookie',
@@ -84,10 +85,11 @@ def test_icloud_pcs_errors_explain_advanced_data_protection():
     )
 
     assert "code 2FA a été accepté" in message
-    assert "Accès aux données iCloud sur le Web" in message
+    assert "conditions iCloud" in message
+    assert "icloud.com" in message
 
 
-def test_icloud_run_classifies_web_approval_separately(tmp_path, monkeypatch):
+def test_icloud_run_classifies_pending_terms_separately(tmp_path, monkeypatch):
     provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
     monkeypatch.setattr("aimemory.cloud.rclone_provider.rclone_binary", lambda: "rclone")
     monkeypatch.setattr(
@@ -100,7 +102,24 @@ def test_icloud_run_classifies_web_approval_separately(tmp_path, monkeypatch):
         ),
     )
 
-    with pytest.raises(ICloudWebApprovalRequired, match="code 2FA a été accepté"):
+    with pytest.raises(ICloudTermsAcceptanceRequired, match="conditions iCloud"):
+        provider.run(["mkdir", provider.spec.remote])
+
+
+def test_icloud_run_classifies_pcs_approval_separately(tmp_path, monkeypatch):
+    provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
+    monkeypatch.setattr("aimemory.cloud.rclone_provider.rclone_binary", lambda: "rclone")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="requestPCS(iclouddrive): Missing PCS cookies from the request",
+        ),
+    )
+
+    with pytest.raises(ICloudWebApprovalRequired, match="Protection avancée"):
         provider.run(["mkdir", provider.spec.remote])
 
 
@@ -177,7 +196,7 @@ def test_icloud_keeps_trusted_session_while_waiting_for_web_approval(tmp_path, m
         "apple_id = julia@example.com\n"
         "password = obscured-password\n"
         "_auth_session = \n"
-        "cookies = trusted-cookie\n"
+        "cookies = X-APPLE-WEBAUTH-TOKEN=trusted-cookie\n"
         "trust_token = trusted-token\n",
         encoding="utf-8",
     )
@@ -209,6 +228,79 @@ def test_icloud_keeps_trusted_session_while_waiting_for_web_approval(tmp_path, m
     assert connected["status"] == "connected"
     assert provider.config.exists()
     assert not provider.icloud_auth_state_path.exists()
+
+
+def test_icloud_upgrades_missing_web_token_session_to_pending_terms(tmp_path):
+    provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
+    provider.icloud_pending_config.parent.mkdir(parents=True, exist_ok=True)
+    provider.icloud_pending_config.write_text(
+        "[aimemory-icloud]\n"
+        "type = iclouddrive\n"
+        "apple_id = julia@example.com\n"
+        "password = obscured-password\n"
+        "_auth_session = \n"
+        "cookies = X-APPLE-WEBAUTH-HSA-TRUST=value\n"
+        "trust_token = trusted-token\n",
+        encoding="utf-8",
+    )
+    provider.icloud_auth_state_path.write_text(
+        json.dumps({"status": "needs_web_approval", "started_at": "2026-09-19T12:00:00Z"}),
+        encoding="utf-8",
+    )
+
+    pending = provider.pending_icloud_auth()
+
+    assert pending["status"] == "needs_terms_acceptance"
+    assert "icloud.com" in pending["message"]
+
+
+def test_icloud_restarts_auth_with_saved_obscured_password_after_terms(tmp_path, monkeypatch):
+    provider = RcloneCloudProvider.for_provider(paths(tmp_path), "icloud-online")
+    provider.icloud_pending_config.parent.mkdir(parents=True, exist_ok=True)
+    provider.icloud_pending_config.write_text(
+        "[aimemory-icloud]\n"
+        "type = iclouddrive\n"
+        "apple_id = julia@example.com\n"
+        "password = obscured-password\n"
+        "cookies = partial-cookie\n"
+        "trust_token = trusted-token\n",
+        encoding="utf-8",
+    )
+    provider.icloud_auth_state_path.write_text(
+        json.dumps({"status": "needs_terms_acceptance"}),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run(args, timeout=600, config=None):
+        calls.append(args)
+        if args[:2] == ["config", "create"]:
+            assert args[args.index("apple_id") + 1] == "julia@example.com"
+            assert args[args.index("password") + 1] == "obscured-password"
+            assert "--no-obscure" in args
+            config.write_text(
+                "[aimemory-icloud]\n"
+                "type = iclouddrive\n"
+                "apple_id = julia@example.com\n"
+                "password = obscured-password\n"
+                "_auth_session = fresh-session\n",
+                encoding="utf-8",
+            )
+            return json.dumps(
+                {
+                    "State": "2fa_do",
+                    "Option": {"Name": "config_2fa", "Help": "Enter the verification code"},
+                    "Error": "",
+                }
+            )
+        return ""
+
+    monkeypatch.setattr(provider, "run", run)
+
+    result = provider.connect({"restart_after_terms": True})
+
+    assert result["status"] == "needs_2fa"
+    assert not any(args[0] == "obscure" for args in calls)
 
 
 @pytest.mark.parametrize(

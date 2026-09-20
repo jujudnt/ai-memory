@@ -135,7 +135,9 @@ class Handler(BaseHTTPRequestHandler):
             folder = self.body.get("folder", "")
             def connect():
                 continuing_icloud = provider == "icloud-online" and bool(
-                    self.body.get("icloud_2fa") or self.body.get("icloud_resume")
+                    self.body.get("icloud_2fa")
+                    or self.body.get("icloud_resume")
+                    or self.body.get("icloud_restart_after_terms")
                 )
                 if not continuing_icloud:
                     _pull_current_destination(self.state.service)
@@ -148,11 +150,16 @@ class Handler(BaseHTTPRequestHandler):
                         "password": self.body.get("icloud_password"),
                         "two_factor_code": self.body.get("icloud_2fa"),
                         "resume_after_approval": self.body.get("icloud_resume"),
+                        "restart_after_terms": self.body.get("icloud_restart_after_terms"),
                         "onedrive_type": self.body.get("onedrive_type"),
                     }
                     with _cloud_config_lock(self.state.service):
                         result = RcloneCloudProvider.for_provider(self.state.service.paths, provider).connect(options)
-                    if result and result.get("status") in {"needs_2fa", "needs_web_approval"}:
+                    if result and result.get("status") in {
+                        "needs_2fa",
+                        "needs_web_approval",
+                        "needs_terms_acceptance",
+                    }:
                         return result
                 elif provider in LOCAL_FOLDER_PROVIDERS:
                     root = resolve_folder_root(provider, folder)
