@@ -100,6 +100,7 @@ class CloudSync:
                     if relative.parts[0] == "snapshots":
                         if hashlib.sha256(payload).hexdigest() != path.name.split(".")[0]:
                             path.unlink()
+                            _wait_for_incomplete_icloud_item(remote, relative_string)
                             raise ValueError("Cloud archive checksum mismatch. Retry synchronization.")
                         conversation = self.service.archive.read(path)
                         if conversation.id != relative.parts[1]:
@@ -118,8 +119,11 @@ class CloudSync:
                                 remote_objects,
                             )
                             read_raw(incoming, relative.as_posix())
+                        except CloudFolderPending:
+                            raise
                         except (OSError, ValueError, KeyError, json.JSONDecodeError):
                             path.unlink()
+                            _wait_for_incomplete_icloud_item(remote, relative_string)
                             raise ValueError("Raw cloud backup checksum mismatch. Retry synchronization.")
                     target = self.paths.archive / relative
                     if not target.exists():
@@ -138,8 +142,7 @@ class CloudSync:
                               object_count=len(remote_objects), retention=retention, error=None)
             except CloudFolderPending as exc:
                 status.update(status="waiting_local_cloud", error=str(exc), heartbeat_at=now(),
-                              requires_action=False)
-                raise
+                              requires_action=False, message=str(exc))
             except Exception as exc:
                 status.update(status="error", error=str(exc), failed_at=now())
                 # A background retry must not repeatedly prompt the user's Apple devices.
@@ -304,16 +307,33 @@ def _hydrate_raw_dependencies(
         path = incoming / current
         if not path.exists():
             if current not in remote_objects:
+                _wait_for_incomplete_icloud_item(remote, current)
                 raise ValueError("Raw backup dependency missing from cloud")
             remote.download(current, path)
         payload = json.loads(gzip.decompress(path.read_bytes()))
         parent = Path(payload["parent"]).as_posix()
         if not re.fullmatch(RAW_PATTERN, parent) or parent not in remote_objects:
+            if re.fullmatch(RAW_PATTERN, parent):
+                _wait_for_incomplete_icloud_item(remote, parent)
             raise ValueError("Raw backup dependency missing from cloud")
         parent_path = incoming / parent
         if not parent_path.exists():
             remote.download(parent, parent_path)
         current = parent
+
+
+def _wait_for_incomplete_icloud_item(remote, relative: str) -> None:
+    """Turn an iCloud placeholder/partial listing into a retryable cloud wait.
+
+    iCloud Drive can expose a child delta before it exposes its parent, or expose
+    an item before its bytes have finished downloading.  Those states have no
+    useful checksum yet, so they must never be reported as archive corruption.
+    """
+    wait_for_item = getattr(remote, "wait_for_item", None)
+    if wait_for_item:
+        message = wait_for_item(relative)
+        if message:
+            raise CloudFolderPending(message)
 
 
 def _allowed_object(relative: str) -> bool:
@@ -400,8 +420,27 @@ class LocalArchiveRemote:
 
     def download(self, relative: str, local_path: Path) -> None:
         source = self.root / relative
-        payload = self._io(source.read_bytes, source)
+        try:
+            payload = self._io(source.read_bytes, source)
+        except FileNotFoundError:
+            _wait_for_incomplete_icloud_item(self, relative)
+            raise
         atomic_write(local_path, payload)
+
+    def wait_for_item(self, relative: str) -> str | None:
+        if not self.icloud:
+            return None
+        path = self.root / relative
+        message = (
+            "iCloud Drive prépare encore un fichier de sauvegarde. "
+            "La synchronisation reprendra automatiquement dès que son contenu sera disponible."
+        )
+        self.progress("waiting_local_cloud", error=message)
+        # Request both paths: a file can be absent from a partial directory
+        # listing even though its directory is already present locally.
+        _request_icloud_download(path.parent)
+        _request_icloud_download(path)
+        return message
 
 
 def _request_icloud_download(path: Path) -> None:

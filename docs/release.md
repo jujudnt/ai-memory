@@ -49,6 +49,8 @@ V0.4.5 preserves rclone's pending Apple authentication session between the passw
 
 V0.4.6 distinguishes successful Apple 2FA from the later Advanced Data Protection PCS-cookie approval. Accounts blocked by `Missing X-APPLE-WEBAUTH-TOKEN` now keep their accepted trust token and show a dedicated Web-access approval step with an idempotent retry, instead of returning to Apple ID/password/2FA fields or requesting another code. Existing pending v0.4.5 sessions are upgraded automatically.
 
+V0.4.10 recognizes iCloud Drive's partial local directory listings: when a raw backup delta or its parent has not arrived locally yet, synchronization waits and requests its download instead of falsely reporting a checksum mismatch. No local backups are cleaned until a complete verification succeeds.
+
 ## macOS Gatekeeper
 
 The macOS build is ad-hoc signed, but it is not notarized with an Apple Developer ID yet. macOS may still show an unidentified developer or malware-verification warning after download.

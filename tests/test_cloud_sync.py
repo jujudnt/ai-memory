@@ -95,12 +95,40 @@ def test_pending_folder_prevents_success_and_local_cleanup(tmp_path, monkeypatch
     def unexpected_cleanup(*args):
         pytest.fail("Must not prune after an incomplete cloud listing")
     monkeypatch.setattr("aimemory.sync.cloud_sync.prune_synced_local_copies", unexpected_cleanup)
-    with pytest.raises(CloudFolderPending):
-        CloudSync(SimpleNamespace(paths=paths)).run()
+    status = CloudSync(SimpleNamespace(paths=paths)).run()
+    assert status["status"] == "waiting_local_cloud"
     status = read_json(paths.state / "sync-status.json")
     assert status["status"] == "waiting_local_cloud"
     assert status["requires_action"] is False
     assert not status.get("last_success_at")
+
+
+def test_icloud_partial_raw_chain_waits_instead_of_reporting_checksum_error(tmp_path, monkeypatch):
+    paths = AppPaths(tmp_path, *(tmp_path / name for name in
+                               ("archive", "db", "vectors", "cache", "logs", "state")))
+    paths.ensure()
+    remote_root = tmp_path.parent / "icloud"
+    relative = "raw/thread/" + "a" * 64 + ".delta.json.gz"
+    raw = remote_root / relative
+    raw.parent.mkdir(parents=True)
+    import gzip
+    import json
+    raw.write_bytes(gzip.compress(json.dumps({
+        "parent": "raw/thread/" + "b" * 64 + ".delta.json.gz",
+        "prefix_size": 1,
+        "append": "YQ==",
+    }).encode()))
+    write_json(paths.state / "cloud.json", {"provider": "icloud-drive", "root": str(remote_root)})
+    requested = []
+    monkeypatch.setattr("aimemory.sync.cloud_sync._request_icloud_download", requested.append)
+
+    status = CloudSync(SimpleNamespace(paths=paths)).run()
+
+    assert status["status"] == "waiting_local_cloud"
+    assert "pr\u00e9pare encore" in status["error"]
+    assert status["requires_action"] is False
+    assert remote_root / "raw/thread" in requested
+    assert remote_root / ("raw/thread/" + "b" * 64 + ".delta.json.gz") in requested
 
 
 def test_cloud_read_retries_busy_but_does_not_hide_permission_errors(tmp_path, monkeypatch):
