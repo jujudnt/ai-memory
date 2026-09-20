@@ -34,5 +34,8 @@ el('cloud-folder').focus();
 el('cloud-folder').value = 'Sauvegardes/Conversations';
 w.render(base);
 assert.equal(el('cloud-folder').value, 'Sauvegardes/Conversations');
+w.render({...base, sync_active:false, sync:{status:'waiting_local_cloud', error:'Dossier indisponible'}});
+assert.match(el('cloud-detail').textContent, /En attente du dossier cloud local/);
+assert.match(el('cloud-detail').textContent, /Dossier indisponible/);
 dom.window.close();
 console.log('Desktop auth transitions and folder editing passed');

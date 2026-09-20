@@ -85,7 +85,7 @@ def run_menubar(service, url: str) -> None:
                 cloud_label = "Cloud non connect\u00e9"
                 if cloud:
                     provider = provider_label(cloud.get("provider"))
-                    phase = {"synced": "\u00e0 jour", "error": "erreur", "preparing": "pr\u00e9paration", "verifying": "v\u00e9rification"}.get(sync.get("status"), "synchronisation")
+                    phase = {"synced": "\u00e0 jour", "error": "erreur", "waiting_local_cloud": "en attente du dossier local", "preparing": "pr\u00e9paration", "verifying": "v\u00e9rification"}.get(sync.get("status"), "synchronisation")
                     cloud_label = f"{provider} : {phase}"
                 cloud_item.setTitle_(cloud_label)
                 warning = health["state"] in {"error", "stale"} or (cloud and sync.get("status") == "error")

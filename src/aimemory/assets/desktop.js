@@ -226,6 +226,7 @@ function render(data) {
     indexing: "Indexation",
     synced: "\u00c0 jour",
     error: "Erreur de synchronisation",
+    waiting_local_cloud: "En attente du dossier cloud local",
   };
   let cloudText = configured
     ? phases[sync.status] || "En attente de synchronisation"
@@ -238,7 +239,7 @@ function render(data) {
     else if (sync.totalBytes > 0)
       cloudText += ` \u00b7 ${size(sync.bytes)} / ${size(sync.totalBytes)} \u00b7 ${size(sync.speed)}/s`;
   }
-  else if (configured && sync.status !== "error" && sync.status !== "synced")
+  else if (configured && !["error", "synced", "waiting_local_cloud"].includes(sync.status))
     cloudText = "En attente de synchronisation";
   if (sync.error && configured) cloudText += ` : ${sync.error}`;
   if (sync.requires_action) cloudText += " Relance manuelle requise.";

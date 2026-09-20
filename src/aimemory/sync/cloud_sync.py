@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 import gzip
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
+import sys
+import time
 from pathlib import Path
 from filelock import FileLock
 
@@ -20,6 +24,10 @@ from aimemory.state import atomic_write, now, read_json, write_json
 OBJECT_PATTERN = re.compile(
     r"(?:snapshots/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json\.(?:gz|zst)|" + RAW_PATTERN + ")"
 )
+
+
+class CloudFolderPending(RuntimeError):
+    """The local cloud client has not made an item accessible yet."""
 
 
 class CloudSync:
@@ -40,6 +48,8 @@ class CloudSync:
             def progress(phase, **details):
                 check_cancelled(self.paths)
                 status.update(status=phase, heartbeat_at=now(), **details)
+                if "error" not in details:
+                    status["error"] = None
                 write_json(self.status_path, status)
             try:
                 progress("preparing")
@@ -126,6 +136,10 @@ class CloudSync:
                 retention = prune_synced_local_copies(self.paths, known)
                 status.update(status="synced", last_success_at=now(), indexed=indexed,
                               object_count=len(remote_objects), retention=retention, error=None)
+            except CloudFolderPending as exc:
+                status.update(status="waiting_local_cloud", error=str(exc), heartbeat_at=now(),
+                              requires_action=False)
+                raise
             except Exception as exc:
                 status.update(status="error", error=str(exc), failed_at=now())
                 # A background retry must not repeatedly prompt the user's Apple devices.
@@ -322,33 +336,85 @@ def _remote_archive(paths, config: dict):
     if provider in LOCAL_FOLDER_PROVIDERS:
         root = Path(config["root"]).expanduser().resolve()
         validate_sync_root(root, paths.home)
-        return LocalArchiveRemote(root)
+        return LocalArchiveRemote(root, icloud=provider == "icloud-drive")
     raise ValueError("Unsupported storage provider")
 
 
 class LocalArchiveRemote:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, icloud: bool = False):
         self.root = root
+        self.icloud = icloud
+        self.progress = lambda *args, **kwargs: None
+
+    def _io(self, operation, path: Path):
+        for attempt in range(3):
+            try:
+                return operation()
+            except OSError as exc:
+                if exc.errno not in {errno.EDEADLK, errno.EAGAIN, errno.EBUSY}:
+                    raise
+                label = "iCloud Drive" if self.icloud else "Le dossier cloud"
+                message = (
+                    f"{label} n'a pas encore rendu accessible {path.name}. "
+                    "Nouvelle tentative automatique avec le watcher. "
+                    "Si l'attente persiste, ouvrez le dossier AI-Memory dans le Finder "
+                    "et choisissez Télécharger maintenant."
+                )
+                self.progress("waiting_local_cloud", error=message)
+                if self.icloud:
+                    _request_icloud_download(path)
+                if attempt == 2:
+                    raise CloudFolderPending(message) from exc
+                time.sleep(attempt + 1)
 
     def list(self, progress) -> set[str]:
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.progress = progress
+        self._io(lambda: self.root.mkdir(parents=True, exist_ok=True), self.root)
         result: set[str] = set()
-        for path in self.root.rglob("*"):
-            check_cancelled_path = path
-            if check_cancelled_path.is_file() and not check_cancelled_path.is_symlink() and not check_cancelled_path.name.startswith("."):
-                relative = check_cancelled_path.relative_to(self.root).as_posix()
-                if _allowed_object(relative):
+        pending = [self.root]
+        while pending:
+            directory = pending.pop()
+            # Do not let a recursive glob silently skip an inaccessible directory.
+            entries = self._io(lambda: list(directory.iterdir()), directory)
+            for path in entries:
+                if path.name.startswith("."):
+                    continue
+                mode = self._io(path.lstat, path).st_mode
+                if stat.S_ISLNK(mode):
+                    continue
+                if stat.S_ISDIR(mode):
+                    pending.append(path)
+                    continue
+                relative = path.relative_to(self.root).as_posix()
+                if stat.S_ISREG(mode) and _allowed_object(relative):
                     result.add(relative)
-        progress("preparing", object_count=len(result))
+        progress("preparing", object_count=len(result), error=None)
         return result
 
     def upload(self, local_path: Path, relative: str) -> None:
         target = self.root / relative
-        if not target.exists():
-            atomic_write(target, local_path.read_bytes())
+        def copy():
+            if not target.exists():
+                atomic_write(target, local_path.read_bytes())
+        self._io(copy, target)
 
     def download(self, relative: str, local_path: Path) -> None:
-        atomic_write(local_path, (self.root / relative).read_bytes())
+        source = self.root / relative
+        payload = self._io(source.read_bytes, source)
+        atomic_write(local_path, payload)
+
+
+def _request_icloud_download(path: Path) -> None:
+    if sys.platform != "darwin":
+        return
+    try:
+        from Foundation import NSFileManager, NSURL
+        NSFileManager.defaultManager().startDownloadingUbiquitousItemAtURL_error_(
+            NSURL.fileURLWithPath_(str(path)), None
+        )
+    except Exception:
+        # Finder can still download the item if the native request is unavailable.
+        pass
 
 
 class RcloneArchiveRemote:
