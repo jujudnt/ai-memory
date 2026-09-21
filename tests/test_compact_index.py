@@ -11,7 +11,8 @@ from aimemory.state import now, write_json
 from test_cloud_integrity import memory, session
 
 
-@pytest.mark.parametrize("text", [None, "", "short", "é漢字\x00" * 10000])
+@pytest.mark.parametrize("text", [None, "", "short", "é漢字\x00" * 10000],
+                         ids=["null", "empty", "short", "long-unicode"])
 def test_lossless_codec(text):
     assert unpack_text(pack_text(text)) == text
 
