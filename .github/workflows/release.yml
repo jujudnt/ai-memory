@@ -35,8 +35,31 @@ jobs:
       - run: pytest -q
       - run: npm test
       - run: python scripts/fetch_rclone.py
+      - name: Import Apple Developer ID certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/ai-memory-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12
+          curl --fail --location --silent --show-error \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+            --output "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" -A
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
       - name: Build macOS app
         if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           pyinstaller --name "AI Memory" --onedir --windowed --collect-all mcp --collect-data aimemory --osx-bundle-identifier io.github.jujudnt.ai-memory src/aimemory/bootstrap.py
           pyinstaller --name ai-memory-cli --onefile --collect-all mcp --collect-data aimemory src/aimemory/bootstrap.py
@@ -45,7 +68,14 @@ jobs:
           cp vendor/rclone "dist/AI Memory.app/Contents/MacOS/rclone"
           cp vendor/rclone-COPYING.txt "dist/AI Memory.app/Contents/Resources/rclone-COPYING.txt"
           chmod +x "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"
-          codesign --force --deep --sign - "dist/AI Memory.app"
+          SIGNING_IDENTITY="Developer ID Application: Julia Denat ($APPLE_TEAM_ID)"
+          find "dist/AI Memory.app/Contents" -type f -print0 | while IFS= read -r -d '' item; do
+            if file "$item" | grep -q 'Mach-O'; then
+              codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$item"
+            fi
+          done
+          codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "dist/AI Memory.app"
+          codesign --verify --deep --strict --verbose=2 "dist/AI Memory.app"
       - name: Build Windows app
         if: runner.os == 'Windows'
         run: pyinstaller --name "AI Memory" --onefile --collect-all mcp --collect-data aimemory --add-binary "vendor/rclone.exe;." --add-data "vendor/rclone-COPYING.txt;." src/aimemory/bootstrap.py
@@ -53,6 +83,23 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent "dist/${{ matrix.executable }}" "release/${{ matrix.artifact-name }}.zip"
+      - name: Notarize macOS app
+        if: runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          xcrun notarytool submit "release/${{ matrix.artifact-name }}.zip" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait --timeout 30m
+          xcrun stapler staple "dist/${{ matrix.executable }}"
+          xcrun stapler validate "dist/${{ matrix.executable }}"
+          spctl --assess --type execute --verbose=2 "dist/${{ matrix.executable }}"
+          rm "release/${{ matrix.artifact-name }}.zip"
           ditto -c -k --sequesterRsrc --keepParent "dist/${{ matrix.executable }}" "release/${{ matrix.artifact-name }}.zip"
       - name: Package Windows
         if: runner.os == 'Windows'
