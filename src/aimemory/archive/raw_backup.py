@@ -87,7 +87,7 @@ def validate_raw(root: Path, relative: str, verified: dict, heartbeat=lambda: No
     """Hash each prefix once per sync without materializing full histories."""
     pending = []
     seen = set()
-    current = relative
+    current = Path(relative).as_posix()
     while current not in verified:
         heartbeat()
         if not re.fullmatch(RAW_PATTERN, current) or current in seen:

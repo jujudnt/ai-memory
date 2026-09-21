@@ -145,6 +145,7 @@ def test_install_all_mcp_configs_copies_frozen_runtime_to_stable_path(tmp_path: 
         patch("sys.executable", str(app_binary)),
         patch("aimemory.installer._installed_cli_helper", return_value=installed),
         patch("aimemory.installer._validate_cli_runtime"),
+        patch("aimemory.installer.codex_available", return_value=True),
         patch("aimemory.installer.claude_desktop_available", return_value=False),
         patch("aimemory.installer.vscode_user_mcp_config_path", return_value=None),
     ):
