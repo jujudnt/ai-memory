@@ -288,6 +288,10 @@ Disponible : import Codex/Claude/VS Code, archives versionnées, recherche FTS5,
 
 Non disponible pour le moment : recherche vectorielle, collecte événementielle à la place du polling, adaptateur Cursor dédié, import Claude Web/Cowork/Design sans export local stable, stockage GitHub privé et chiffrement de bout en bout optionnel. Consultez [docs/roadmap.md](docs/roadmap.md).
 
+## Licence
+
+[MIT](LICENSE)
+
 ---
 
 <a id="english"></a>
