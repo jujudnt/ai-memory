@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aimemory.models import NormalizedConversation
+from aimemory.db.codec import pack_text, unpack_text
 
 
 class MemoryDatabase:
@@ -23,6 +24,7 @@ class MemoryDatabase:
         conn = sqlite3.connect(self.path, timeout=30)
         try:
             conn.row_factory = sqlite3.Row
+            conn.create_function("unpack_text", 1, unpack_text, deterministic=True)
             conn.execute("PRAGMA foreign_keys = ON")
             yield conn
             conn.commit()
@@ -84,11 +86,23 @@ class MemoryDatabase:
                     FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS compact_index_versions (
+                    conversation_id TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL,
+                    FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_conversations_project
                 ON conversations(project_id);
 
                 CREATE INDEX IF NOT EXISTS idx_messages_conversation_role_ordinal
                 ON messages(conversation_id, role, ordinal DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation_ordinal
+                ON messages(conversation_id, ordinal);
+
+                CREATE INDEX IF NOT EXISTS idx_conversations_device
+                ON conversations(device_id);
 
                 CREATE TABLE IF NOT EXISTS tool_calls (
                     id TEXT PRIMARY KEY,
@@ -112,6 +126,9 @@ class MemoryDatabase:
                     last_processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY(source, source_path)
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation_ordinal
+                ON tool_calls(conversation_id, ordinal);
 
                 CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
                     conversation_id UNINDEXED,
@@ -207,8 +224,8 @@ class MemoryDatabase:
                         call_id,
                         conversation.id,
                         call.name,
-                        call.arguments,
-                        call.output,
+                        pack_text(call.arguments),
+                        pack_text(call.output),
                         call.timestamp,
                         call.ordinal,
                     ),
@@ -226,6 +243,8 @@ class MemoryDatabase:
                     conversation.searchable_text(),
                 ),
             )
+
+            conn.execute("INSERT OR REPLACE INTO compact_index_versions VALUES (?, 1)", (conversation.id,))
 
             if source_path and file_hash is not None and size is not None and mtime is not None:
                 conn.execute(
@@ -262,6 +281,8 @@ class MemoryDatabase:
         date_from: str | None = None,
         date_to: str | None = None,
         offset: int = 0,
+        device: str | None = None,
+        current_device_id: str | None = None,
     ) -> list[dict[str, Any]]:
         self.initialize()
         sql = """
@@ -275,15 +296,26 @@ class MemoryDatabase:
                 c.updated_at,
                 c.model,
                 c.archive_path,
-                snippet(conversations_fts, 4, '[', ']', '...', 24) AS snippet,
+                c.device_id,
+                d.name AS device_name,
+                p.name AS project_name,
+                p.cwd AS project_path,
+                (SELECT substr(m.content, 1, 400) FROM messages m
+                 WHERE m.conversation_id = c.id AND m.role = 'user'
+                 ORDER BY m.ordinal DESC LIMIT 1) AS latest_user_message,
+                substr(snippet(conversations_fts, 4, '[', ']', '...', 24), 1, 600) AS snippet,
                 bm25(conversations_fts) AS score
             FROM conversations_fts
             JOIN conversations c ON c.id = conversations_fts.conversation_id
+            JOIN devices d ON d.id = c.device_id
+            LEFT JOIN projects p ON p.id = c.project_id
             WHERE conversations_fts MATCH ?
         """
         params: list[Any] = [_fts_query(query)]
         clause, filters = _filters(source, project_id, date_from, date_to, "c.")
-        sql += clause + " ORDER BY score, c.id LIMIT ? OFFSET ?"
+        device_clause, device_filters = _device_filter(device, current_device_id, "c.")
+        sql += clause + device_clause + " ORDER BY (p.name = ? COLLATE NOCASE) DESC, score, c.updated_at DESC, c.id LIMIT ? OFFSET ?"
+        filters.extend([*device_filters, query.strip()])
         params.extend([*filters, max(1, min(limit, 1000)), max(0, offset)])
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
@@ -296,16 +328,21 @@ class MemoryDatabase:
         date_from: str | None = None,
         date_to: str | None = None,
         offset: int = 0,
+        device: str | None = None,
+        current_device_id: str | None = None,
     ) -> list[dict[str, Any]]:
         self.initialize()
         sql = "SELECT * FROM conversations WHERE 1=1"
         params: list[Any] = []
         clause, params = _filters(source, project_id, date_from, date_to)
         sql += clause
+        device_clause, device_filters = _device_filter(device, current_device_id)
+        sql += device_clause
+        params.extend(device_filters)
         sql = f"""
-            SELECT c.*,
+            SELECT c.*, d.name AS device_name, p.name AS project_name, p.cwd AS project_path,
                 (
-                    SELECT m.content
+                    SELECT substr(m.content, 1, 1000)
                     FROM messages m
                     WHERE m.conversation_id = c.id AND m.role = 'user'
                     ORDER BY m.ordinal DESC
@@ -319,6 +356,8 @@ class MemoryDatabase:
                     LIMIT 1
                 ) AS latest_user_message_at
             FROM ({sql}) c
+            JOIN devices d ON d.id = c.device_id
+            LEFT JOIN projects p ON p.id = c.project_id
             ORDER BY COALESCE(c.updated_at, c.created_at) DESC, c.id
             LIMIT ? OFFSET ?
         """
@@ -331,6 +370,57 @@ class MemoryDatabase:
                 rows.append(item)
             return rows
 
+    def list_devices(self, current_device_id: str) -> list[dict]:
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT d.id, d.name, d.id = ? AS is_current, COUNT(c.id) AS conversation_count, "
+                "MAX(c.updated_at) AS latest_conversation_at FROM devices d "
+                "JOIN conversations c ON c.device_id = d.id GROUP BY d.id ORDER BY d.name, d.id",
+                (current_device_id,))]
+
+    def conversation_page(self, conversation_id: str, offset: int = 0, limit: int = 20,
+                          latest: bool = False, include_tools: bool = False,
+                          max_chars: int = 2000, include_context: bool = False) -> dict | None:
+        """Read bounded indexed excerpts; never decompress a full session for MCP."""
+        self.initialize()
+        offset, limit, max_chars = max(0, offset), max(1, min(limit, 20)), max(100, min(max_chars, 4000))
+        max_chars = min(max_chars, 48000 // (limit * (3 if include_tools else 1)))
+        role_filter = "" if include_context else " AND role IN ('user', 'assistant')"
+        with self.connect() as conn:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                "SELECT c.id, c.source, c.source_session_id, c.title, c.created_at, c.updated_at, "
+                "c.device_id, d.name AS device_name, c.project_id, p.name AS project_name, p.cwd AS project_path "
+                "FROM conversations c JOIN devices d ON d.id=c.device_id "
+                "LEFT JOIN projects p ON p.id=c.project_id WHERE c.id=?", (conversation_id,)).fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            count = conn.execute("SELECT COUNT(*) FROM messages WHERE conversation_id=?" + role_filter,
+                                 (conversation_id,)).fetchone()[0]
+            start = max(0, count - offset - limit) if latest else offset
+            size = min(limit, max(0, count - offset))
+            result["messages"] = [dict(item) for item in conn.execute(
+                "SELECT id, role, timestamp, ordinal, substr(content, 1, ?) AS content, "
+                "length(content) > ? AS truncated FROM messages WHERE conversation_id=?" + role_filter +
+                " ORDER BY ordinal, id LIMIT ? OFFSET ?", (max_chars, max_chars, conversation_id, size, start))]
+            tool_count = conn.execute("SELECT COUNT(*) FROM tool_calls WHERE conversation_id=?",
+                                      (conversation_id,)).fetchone()[0]
+            result["tool_calls"] = []
+            if include_tools:
+                tool_start = max(0, tool_count - offset - limit) if latest else offset
+                result["tool_calls"] = [dict(item) for item in conn.execute(
+                    "SELECT id, name, timestamp, ordinal, substr(unpack_text(arguments),1,?) AS arguments, "
+                    "substr(unpack_text(output),1,?) AS output, (COALESCE(length(unpack_text(arguments)),0)>? OR COALESCE(length(unpack_text(output)),0)>?) "
+                    "AS truncated FROM tool_calls WHERE conversation_id=? ORDER BY ordinal, id LIMIT ? OFFSET ?",
+                    (max_chars, max_chars, max_chars, max_chars, conversation_id,
+                     min(limit, max(0, tool_count-offset)), tool_start))]
+            total = max(count, tool_count) if include_tools else count
+            result.update(message_count=count, tool_call_count=tool_count, offset=offset,
+                          limit=limit, latest=latest, next_offset=offset+limit if offset+limit < total else None)
+            return result
+
     def list_projects(self) -> list[dict]:
         self.initialize()
         with self.connect() as conn:
@@ -339,10 +429,37 @@ class MemoryDatabase:
                 "JOIN conversations c ON c.project_id = p.id GROUP BY p.id ORDER BY p.name, p.id"
             )]
 
+    def message_excerpt(self, conversation_id: str, message_id: str, offset: int = 0,
+                        limit: int = 8000, field: str = "content") -> dict | None:
+        self.initialize()
+        if field not in {"content", "output", "arguments"}:
+            raise ValueError("field must be content, output or arguments")
+        table = "messages" if field == "content" else "tool_calls"
+        expression = field if field == "content" else f"unpack_text({field})"
+        offset, limit = max(0, offset), max(1, min(limit, 16000))
+        with self.connect() as conn:
+            row = conn.execute(
+                f"SELECT id, substr({expression}, ?, ?) AS text, length({expression}) AS total_chars "
+                f"FROM {table} WHERE conversation_id=? AND id=?",
+                (offset+1, limit, conversation_id, message_id)).fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            result.update(field=field, offset=offset,
+                          next_offset=offset+limit if offset+limit < (result["total_chars"] or 0) else None)
+            return result
+
     def archive_entries(self) -> list[dict]:
         self.initialize()
         with self.connect() as conn:
             return [dict(row) for row in conn.execute("SELECT id, source, archive_path FROM conversations")]
+
+    def pending_compact_entries(self, limit: int = 3) -> list[dict]:
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT c.id, c.archive_path FROM conversations c LEFT JOIN compact_index_versions v "
+                "ON v.conversation_id=c.id WHERE COALESCE(v.version,0)<1 ORDER BY c.id LIMIT ?", (limit,))]
 
     def update_source(self, conversation_id: str, source: str) -> None:
         self.initialize()
@@ -407,6 +524,18 @@ def _filters(source, project, date_from, date_to, prefix=""):
 
 def _scoped_id(conversation_id: str, raw_id: str) -> str:
     return hashlib.sha256(f"{conversation_id}:{raw_id}".encode("utf-8")).hexdigest()
+
+
+def _device_filter(device, current_device_id, prefix=""):
+    if not device or device == "all":
+        return "", []
+    if device in {"other", "current"}:
+        if not current_device_id:
+            raise ValueError("Current device identity is required")
+        operator = "!=" if device == "other" else "="
+        return f" AND {prefix}device_id {operator} ?", [current_device_id]
+    return (f" AND {prefix}device_id IN (SELECT id FROM devices WHERE id=? OR name=? COLLATE NOCASE)",
+            [device, device])
 
 
 def _fts_query(query: str) -> str:

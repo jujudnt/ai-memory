@@ -16,6 +16,7 @@ from aimemory.config import default_codex_home
 from aimemory.models import DeviceIdentity, Message, NormalizedConversation, ProjectIdentity, ToolCall
 from aimemory.projects import identify_project
 from aimemory.sources import codex_source
+from aimemory.adapters.codex_messages import deduplicate_messages, NORMALIZATION_VERSION
 
 
 class CodexAdapter:
@@ -177,7 +178,7 @@ class CodexAdapter:
             project=project,
             model=model,
             title=title,
-            messages=messages,
+            messages=deduplicate_messages(messages),
             tool_calls=tool_calls,
             files_referenced=sorted(files),
             commands=commands,
@@ -187,6 +188,7 @@ class CodexAdapter:
                 "codex_cli_version": session_meta.get("cli_version"),
                 "history_mode": session_meta.get("history_mode"),
                 "parser_version": self.parser_version,
+                "message_normalization_version": NORMALIZATION_VERSION,
                 "codex_thread_source": thread_meta.get("source"),
                 "codex_project": asdict(codex_project) if codex_project else None,
                 "code_project": asdict(code_project) if code_project else None,

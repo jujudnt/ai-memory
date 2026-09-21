@@ -11,6 +11,7 @@ from filelock import FileLock
 
 from aimemory.adapters import ClaudeAdapter, CodexAdapter, VSCodeAdapter
 from aimemory.adapters.base import ConversationSourceAdapter
+from aimemory.adapters.codex_messages import normalize_codex_messages, NORMALIZATION_VERSION
 from aimemory.archive import JsonArchive
 from aimemory.archive.raw_backup import write_raw
 from aimemory.cleanup import run_auto_cleanup
@@ -47,6 +48,8 @@ class MemoryService:
     def import_codex(self, codex_home: Path | None = None, force: bool = False) -> ImportResult:
         with self.lock:
             self._repair_codex_labels()
+            self._repair_codex_messages()
+            self._repair_compact_index()
             return self._import_adapter(CodexAdapter(codex_home=codex_home), force=force)
 
     def import_claude(self, claude_home: Path | None = None, force: bool = False) -> ImportResult:
@@ -60,6 +63,8 @@ class MemoryService:
     def import_all(self, force: bool = False, codex_home: Path | None = None) -> ImportResult:
         with self.lock:
             self._repair_codex_labels()
+            self._repair_codex_messages()
+            self._repair_compact_index()
             result = ImportResult(scanned=0, imported=0, skipped=0, errors=[])
             for adapter in (CodexAdapter(codex_home=codex_home), ClaudeAdapter(), VSCodeAdapter()):
                 partial = self._import_adapter(adapter, force=force)
@@ -150,7 +155,25 @@ class MemoryService:
             write_json(manifest_path, manifest)
         return ImportResult(scanned=len(sessions), imported=imported, skipped=skipped, errors=errors)
 
+    def _repair_codex_messages(self, batch_size: int = 3) -> None:
+        marker = self.paths.state / "codex-message-normalization.json"
+        progress = read_json(marker)
+        done = set(progress.get("completed", []))
+        entries = [row for row in self.db.archive_entries()
+                   if row["source"] in CODEX_SOURCES and row["id"] not in done]
+        for row in entries[:batch_size]:
+            conversation = self.archive.read(Path(row["archive_path"]), normalize=False)
+            if conversation.metadata.get("message_normalization_version", 0) < NORMALIZATION_VERSION:
+                before = len(conversation.messages)
+                normalize_codex_messages(conversation)
+                if len(conversation.messages) != before:
+                    path = self.archive.write(conversation)
+                    self.db.upsert_conversation(conversation, path)
+            done.add(row["id"])
+            write_json(marker, {"completed": sorted(done), "updated_at": now()})
+
     def accept_conversation(self, conversation: NormalizedConversation) -> bool:
+        normalize_codex_messages(conversation)
         existing = self.get_conversation(conversation.id)
         if existing and _conversation_content_digest(existing) == _conversation_content_digest(conversation):
             return False
@@ -174,6 +197,14 @@ class MemoryService:
         path = self.archive.write(conversation)
         self.db.upsert_conversation(conversation, path)
         return True
+
+    def _repair_compact_index(self, batch_size: int = 3) -> int:
+        entries = self.db.pending_compact_entries(batch_size)
+        for entry in entries:
+            path = Path(entry["archive_path"])
+            # Rebuild only the disposable index; do not create cloud revisions.
+            self.db.upsert_conversation(self.archive.read(path), path)
+        return len(entries)
 
     def sync_now(self) -> dict:
         from aimemory.sync.cloud_sync import CloudSync

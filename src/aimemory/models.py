@@ -105,8 +105,10 @@ class NormalizedConversation:
                 if item
             )
         parts.extend(self.files_referenced)
-        parts.extend(self.commands)
-        parts.extend(message.content for message in self.messages if message.content)
-        parts.extend(call.arguments or "" for call in self.tool_calls)
-        parts.extend(call.output or "" for call in self.tool_calls)
+        parts.extend(command[:4096] for command in self.commands)
+        parts.extend(message.content for message in self.messages
+                     if message.content and message.role in {"user", "assistant"})
+        # Bulk tool output stays lossless in storage, not duplicated in the search index.
+        parts.extend(call.name for call in self.tool_calls)
+        parts.extend((call.arguments or "")[:2048] for call in self.tool_calls)
         return "\n".join(part for part in parts if part)

@@ -18,10 +18,19 @@ async def check_mcp(executable: str, env: dict) -> None:
         async with ClientSession(reader, writer) as session:
             await session.initialize()
             result = await session.list_tools()
-            assert {"search_conversations", "list_projects", "get_sync_status"} <= {t.name for t in result.tools}
+            assert {"search_conversations", "list_projects", "list_devices", "get_message", "get_sync_status"} <= {t.name for t in result.tools}
             response = await session.call_tool("search_conversations", {"query": "packaged-smoke-marker"})
             assert not getattr(response, "is_error", getattr(response, "isError", False)), response
             assert "packaged-smoke-marker" in str(response.content)
+            listing = await session.call_tool("list_conversations", {"limit": 1})
+            rows = json.loads(next(item.text for item in listing.content if item.type == "text"))
+            # SDK versions may emit each list item in a separate text block.
+            item = rows[0] if isinstance(rows, list) else rows
+            page = await session.call_tool("get_conversation", {
+                "conversation_id": item["id"], "latest": True, "limit": 6})
+            assert not getattr(page, "is_error", getattr(page, "isError", False)), page
+            assert "packaged-smoke-marker" in str(page.content)
+            assert len(str(page.content)) < 20000
 
 
 def main() -> None:

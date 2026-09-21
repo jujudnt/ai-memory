@@ -128,20 +128,30 @@ Cherche dans AI Memory mes derniers échanges concernant le projet Sabai et rés
 ```
 
 ```text
+Retrouve avec AI Memory la conversation Codex sur Sabai depuis mon autre Mac, puis lis les derniers échanges.
+```
+
+L'assistant peut filtrer directement par projet et ordinateur, sans connaître le chemin des fichiers. Si la dictée déforme un nom (par exemple « ça bye » pour « Sabai »), il peut consulter les noms de projets proches avant de confirmer le bon. Une mise à jour du MCP nécessite de quitter puis relancer le client qui le charge.
+
+```text
 Vérifie avec AI Memory quand la dernière synchronisation cloud a réussi.
 ```
 
 Le MCP expose les outils suivants :
 
-- `search_conversations` : recherche plein texte ;
-- `get_conversation` : lecture paginée d'une conversation (`offset`, `limit`, `next_offset`) ;
-- `list_conversations` : liste filtrée par source ou projet ;
+- `search_conversations` : mots-clés ou demande courte en français/anglais, avec projet, ordinateur et aperçu du dernier message dans les résultats ;
+- `get_conversation` : lecture rapide dans l'index, 20 messages maximum par page ; `latest=true` commence par les derniers échanges, `next_offset` remonte ensuite vers les plus anciens. Les longs textes sont tronqués explicitement ; les sorties d'outils et le contexte système sont optionnels (`include_tools`, `include_context`) ;
+- `get_message` : suite d'un long message par position de caractère (`offset`, `limit`) ; `field=output` ou `arguments` pour un outil ;
+- `list_conversations` : liste filtrée par source, projet ou ordinateur ;
+- `list_devices` : ordinateurs connus et identification de l'ordinateur actuel ;
 - `get_project_history` : historique d'un projet ;
-- `list_projects` : noms, chemins et identifiants pour distinguer les projets homonymes ;
+- `list_projects` : noms, chemins et identifiants pour distinguer les projets homonymes ; `query` propose aussi des noms approchants sans les sélectionner automatiquement ;
 - `get_sync_status` : état du watcher et du cloud ;
 - `sync_now` : demande de synchronisation au watcher, sans bloquer le client pendant le transfert. Le watcher doit être actif.
 
 La recherche accepte des dates ISO, un nom ou identifiant de projet, et les familles `codex`, `claude` ou `vscode`, incluant leurs variantes. Deux dossiers de même nom ne sont pas fusionnés uniquement à cause de leur nom. Les projets créés indépendamment sur plusieurs machines peuvent garder des identifiants distincts.
+
+Pour les outils MCP, `device=other` cible les autres ordinateurs, `device=current` cet ordinateur ; un nom exact ou identifiant d'appareil est également accepté. Exemple : `search_conversations(query="", project="Sabai", source="codex", device="other")`, puis `get_conversation(conversation_id="…", latest=true, limit=6)`. La date retournée est celle de la dernière version reçue, pas une garantie que l'autre Mac a déjà tout envoyé.
 
 ### Utiliser plusieurs ordinateurs
 
@@ -154,6 +164,16 @@ Le libellé **Codex Desktop** ou **Codex VS Code** repose sur l'origine explicit
 
 Chaque machine reconstruit son propre index de recherche à partir des archives téléchargées. AI Memory ne réinjecte pas les conversations dans la barre latérale native de Codex ou Claude ; elles restent consultables via AI Memory et le MCP.
 
+```mermaid
+flowchart LR
+    M1[Mac 1 : archives] <--> C[Cloud : dossier partagé]
+    C <--> M2[Mac 2 : archives]
+    M1 --> I1[Index local FTS5] --> A1[MCP / assistant]
+    M2 --> I2[Index local FTS5] --> A2[MCP / assistant]
+```
+
+La recherche utilise un index plein texte local, sans vectorisation actuellement. Le cloud échange les archives ; chaque Mac garde son propre index. Les deux représentations techniques d'un même message Codex sont fusionnées ; les répétitions réelles restent conservées. Les archives existantes sont corrigées progressivement par le watcher, avec conservation de la version précédente et des sources originales selon la rétention habituelle.
+
 ### Stockage et nettoyage automatique
 
 AI Memory affiche séparément :
@@ -164,6 +184,10 @@ AI Memory affiche séparément :
 - **Total sur cet ordinateur** : ensemble des fichiers AI Memory locaux, y compris fichiers temporaires et état de synchronisation.
 
 Après une sauvegarde cloud vérifiée, AI Memory supprime automatiquement du Mac les originaux compressés et les anciennes révisions lourdes qui sont confirmés dans le cloud. Les conversations courantes et l'index restent disponibles localement afin que le MCP soit rapide et fonctionne hors ligne.
+
+L'index compact recherche dans les messages utilisateur/assistant, les projets, les fichiers, les commandes (4 096 caractères par commande), les noms d'outils et le début de leurs arguments (2 048 caractères). Les volumineuses sorties d'outils et les instructions système ne sont plus dupliquées dans l'index plein texte. Leur contenu intégral reste consultable : les sorties d'outils sont compressées sans perte et décompressées à la demande par le MCP. Les archives ne sont pas tronquées. La conversion des anciens index est automatique et progressive, puis SQLite récupère l'espace libéré hors transfert/import. Cette conversion ne renvoie pas les archives dans le cloud.
+
+La vectorisation n'est pas encore implémentée et ne remplacerait pas les archives : elle ajouterait un modèle et un index pour la recherche sémantique. Le gain d'espace de cette version vient de l'index compact et de la compression, pas de vecteurs. Il ne s'agit pas encore d'un mode entièrement « cloud à la demande » : les conversations courantes restent sur le Mac.
 
 Pour **iCloud/OneDrive/Dropbox du Mac**, une copie locale ne prouve pas l'envoi aux serveurs du fournisseur : le statut l'indique et AI Memory conserve ses originaux. Les ajouts aux sources utilisent des deltas, avec une base complète au maximum toutes les 32 dépendances. L'index peut être compacté automatiquement hors import/transfert si l'espace disponible le permet. Le nettoyage des anciens ZIP vise le cache AI Memory, pas les téléchargements personnels du navigateur.
 
@@ -444,17 +468,27 @@ Search AI Memory for my latest discussions about the Sabai project and summarize
 Use AI Memory to check when the last cloud synchronization succeeded.
 ```
 
+```text
+Use AI Memory to find my Codex conversation about Sabai on my other Mac, then read the latest exchanges.
+```
+
+The assistant can filter directly by project and computer without knowing file paths. If voice dictation distorts a project name, it can check similar project names before confirming the right one. After updating MCP, fully quit and restart the client that loads it.
+
 The MCP server exposes:
 
-- `search_conversations`: full-text search;
-- `get_conversation`: paginated retrieval (`offset`, `limit`, `next_offset`);
-- `list_conversations`: list conversations by source or project;
+- `search_conversations`: keywords or a short French/English request, returning project, computer and latest-message preview;
+- `get_conversation`: fast indexed retrieval, up to 20 messages per page; `latest=true` starts with the newest exchanges and `next_offset` then moves backwards. Long text is explicitly truncated; tool output and system context are optional (`include_tools`, `include_context`);
+- `get_message`: continue a long message using character offsets (`offset`, `limit`); use `field=output` or `arguments` for a tool;
+- `list_conversations`: filter by source, project or computer;
+- `list_devices`: known computers, with the current computer identified;
 - `get_project_history`: retrieve project history;
-- `list_projects`: discover project names, paths and IDs to distinguish identical names;
+- `list_projects`: project names, paths and IDs; optional `query` suggests similar names without automatically selecting one;
 - `get_sync_status`: inspect watcher and cloud state;
 - `sync_now`: queue a request for the watcher without blocking the client during transfers. The watcher must be running.
 
 Search supports ISO dates, a project name or ID, and the `codex`, `claude` and `vscode` source families including their variants. Unrelated folders are not merged solely because their names match. Projects created independently on different computers may retain distinct IDs.
+
+MCP tools accept `device=other` for other computers, `device=current` for this computer, or an exact device name/ID. Example: `search_conversations(query="", project="Sabai", source="codex", device="other")`, then `get_conversation(conversation_id="…", latest=true, limit=6)`. The returned timestamp identifies the latest received revision; it does not guarantee that the other Mac has finished uploading.
 
 ### Use multiple computers
 
@@ -467,6 +501,16 @@ The **Codex Desktop** or **Codex VS Code** label uses the explicit origin record
 
 Each machine builds its own search index from downloaded archives. AI Memory does not restore conversations into the native Codex or Claude sidebar; they remain available through AI Memory and MCP.
 
+```mermaid
+flowchart LR
+    M1[Mac 1: archives] <--> C[Cloud: shared folder]
+    C <--> M2[Mac 2: archives]
+    M1 --> I1[Local FTS5 index] --> A1[MCP / assistant]
+    M2 --> I2[Local FTS5 index] --> A2[MCP / assistant]
+```
+
+Search currently uses a local full-text index, without vector embeddings. The cloud exchanges archives; each Mac keeps its own index. Codex's two technical representations of the same message are merged, while genuine repetitions remain. The watcher gradually repairs existing archives, retaining the previous revision and original sources under the usual retention policy.
+
 ### Storage and automatic cleanup
 
 AI Memory reports these values separately:
@@ -477,6 +521,10 @@ AI Memory reports these values separately:
 - **Total on this computer**: all local AI Memory files, including temporary files and synchronization state.
 
 After a verified cloud backup, AI Memory automatically removes compressed originals and large historical revisions from the Mac when they are confirmed in the cloud. Current conversations and the search index remain local so MCP stays fast and works offline.
+
+The compact index searches user/assistant messages, projects, files, commands (4,096 characters per command), tool names, and argument prefixes (2,048 characters). Large tool outputs and system instructions are no longer duplicated in the full-text index. Their full content remains accessible: tool data is compressed losslessly and decompressed on demand by MCP. Archives are not truncated. Existing indexes are converted automatically in small batches, then SQLite reclaims free space outside transfers/imports. This conversion does not upload archives again.
+
+Vector search is not implemented yet and would not replace archives: it would add a model and an index for semantic retrieval. This version saves space through compact indexing and compression, not vectors. It is not a fully cloud-on-demand mode yet: current conversations stay on the Mac.
 
 For **iCloud/OneDrive/Dropbox on the Mac**, a local copy does not prove server upload: the UI states this and AI Memory retains its originals. Source appends use deltas, with a full base at most every 32 dependencies. SQLite can be compacted automatically outside imports/transfers when sufficient disk space is available. Old ZIP cleanup covers AI Memory's cache, not personal browser downloads.
 

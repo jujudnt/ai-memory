@@ -53,11 +53,11 @@ def _cleanup(paths: AppPaths, force: bool) -> dict:
     return status
 
 
-def compact_search_index(paths: AppPaths) -> dict:
+def compact_search_index(paths: AppPaths, force: bool = False) -> dict:
     """Reclaim SQLite free pages while no import or cloud transfer owns the data."""
     status_path = paths.state / "index-maintenance.json"
     previous = read_json(status_path)
-    if _fresh(previous.get("last_run_at")):
+    if not force and previous.get("compact_index_version") == 1 and _fresh(previous.get("last_run_at")):
         return previous
     database = paths.db / "memory.sqlite"
     if not database.is_file():
@@ -66,6 +66,22 @@ def compact_search_index(paths: AppPaths) -> dict:
         with FileLock(str(paths.state / "sync.lock"), timeout=0), FileLock(str(paths.state / "operations.lock"), timeout=0):
             connection = sqlite3.connect(database, timeout=1)
             try:
+                if connection.execute("SELECT 1 FROM sqlite_master WHERE name='compact_index_versions'").fetchone():
+                    pending = connection.execute(
+                        "SELECT 1 FROM conversations c LEFT JOIN compact_index_versions v "
+                        "ON v.conversation_id=c.id WHERE COALESCE(v.version,0)<1 LIMIT 1"
+                    ).fetchone()
+                    if pending:
+                        return {"status": "migrating"}
+                    if not pending and previous.get("compact_index_version") != 1:
+                        if shutil.disk_usage(paths.home).free < database.stat().st_size * 2 + 256 * 1024 * 1024:
+                            return {"status": "waiting_for_space"}
+                        connection.execute("INSERT INTO conversations_fts(conversations_fts) VALUES ('optimize')")
+                        connection.commit()
+                    else:
+                        pending = True
+                else:
+                    pending = True
                 page_size = connection.execute("PRAGMA page_size").fetchone()[0]
                 pages = connection.execute("PRAGMA page_count").fetchone()[0]
                 free = connection.execute("PRAGMA freelist_count").fetchone()[0]
@@ -76,7 +92,8 @@ def compact_search_index(paths: AppPaths) -> dict:
                     if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                         return {"status": "integrity_check_failed"}
                     connection.execute("VACUUM")
-                result = {"last_run_at": now(), "freed_bytes": max(0, before - database.stat().st_size)}
+                result = {"last_run_at": now(), "freed_bytes": max(0, before - database.stat().st_size),
+                          "compact_index_version": previous.get("compact_index_version", 0) if pending else 1}
                 write_json(status_path, result)
                 return result
             finally:

@@ -9,6 +9,7 @@ from pathlib import Path
 from aimemory.models import NormalizedConversation
 from aimemory.state import atomic_write
 from aimemory.sources import CODEX_SOURCES, codex_source
+from aimemory.adapters.codex_messages import normalize_codex_messages
 
 try:
     import zstandard as zstd
@@ -59,7 +60,7 @@ class JsonArchive:
             atomic_write(target, payload)
         return target
 
-    def read(self, path: Path) -> NormalizedConversation:
+    def read(self, path: Path, normalize: bool = True) -> NormalizedConversation:
         if path.suffix == ".zst":
             if not zstd:
                 raise RuntimeError("Install ai-memory[zstd] to read .zst archives")
@@ -71,6 +72,8 @@ class JsonArchive:
         conversation = NormalizedConversation.from_dict(json.loads(raw.decode("utf-8")))
         if conversation.source in CODEX_SOURCES:
             conversation.source = codex_source(conversation.metadata.get("session_metadata") or {})
+            if normalize:
+                normalize_codex_messages(conversation)
         return conversation
 
     def iter_archives(self) -> list[Path]:
