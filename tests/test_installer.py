@@ -135,6 +135,7 @@ def test_install_all_mcp_configs_copies_frozen_runtime_to_stable_path(tmp_path: 
     helper.write_bytes(b"standalone-mcp")
     codex_config = tmp_path / ".codex" / "config.toml"
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     with (
         patch("sys.frozen", True, create=True),
