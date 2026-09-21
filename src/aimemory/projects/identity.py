@@ -51,7 +51,7 @@ def identify_project(
     if cwd:
         name = Path(cwd).name or "unknown-project"
         return ProjectIdentity(
-            id=stable_project_id(name),
+            id=stable_project_id(str(Path(cwd))),
             name=name,
             cwd=cwd,
             git_remote=None,

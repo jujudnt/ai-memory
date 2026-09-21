@@ -10,6 +10,8 @@ from pathlib import Path
 from aimemory.service import MemoryService
 from aimemory.state import read_json, write_json
 from filelock import FileLock, Timeout
+from aimemory import __version__
+from aimemory.cleanup import run_auto_cleanup, compact_search_index
 
 
 @dataclass(slots=True)
@@ -25,6 +27,7 @@ class WatcherStatus:
     skipped: int = 0
     total_scans: int = 0
     pid: int = 0
+    version: str = __version__
 
 
 class WatcherService:
@@ -86,13 +89,23 @@ class WatcherService:
         self._write_status()
         # Cloud failures do not erase the collector's independent health signal.
         thread = getattr(self, "_sync_thread", None)
-        if read_json(self.service.paths.state / "sync-status.json").get("requires_action"):
+        sync_status = read_json(self.service.paths.state / "sync-status.json")
+        request = self.service.paths.state / "sync-request.json"
+        requested = request.exists()
+        if not requested and (sync_status.get("requires_action") or
+                (sync_status.get("retry_after") or 0) > time.time() or
+                read_json(self.service.paths.state / "sync-preferences.json").get("paused")):
             return
-        if (thread is None or not thread.is_alive()) and time.monotonic() - getattr(self, "_last_sync", -60) >= 60:
+        if (thread is None or not thread.is_alive()) and (requested or time.monotonic() - getattr(self, "_last_sync", -60) >= 60):
             self._last_sync = time.monotonic()
             def synchronize():
                 try:
+                    if requested:
+                        request.unlink(missing_ok=True)
+                        write_json(self.service.paths.state / "sync-preferences.json", {"paused": False})
                     self.service.sync_now()
+                    run_auto_cleanup(self.service.paths)
+                    compact_search_index(self.service.paths)
                 except Exception:
                     pass  # CloudSync persists failures and the next minute retries.
             self._sync_thread = threading.Thread(target=synchronize, daemon=True)

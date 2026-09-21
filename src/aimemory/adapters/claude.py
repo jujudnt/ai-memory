@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from aimemory.adapters.base import DiscoveredSource, SourceSession
@@ -21,10 +22,10 @@ from aimemory.projects import identify_project
 
 class ClaudeAdapter:
     source = "claude"
-    parser_version = 3
+    parser_version = 5
 
     def __init__(self, claude_home: Path | None = None, device_id: str | None = None):
-        self.claude_home = claude_home or Path("~/.claude").expanduser()
+        self.claude_home = claude_home or Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
         self.device = device_identity(device_id)
 
     def discover(self) -> list[DiscoveredSource]:
@@ -53,6 +54,7 @@ class ClaudeAdapter:
         git_branch = None
         model = None
         entrypoint = None
+        outputs: dict[str, str] = {}
         project_dir = _project_dir(path, self.claude_home)
 
         for ordinal, record in enumerate(records):
@@ -81,7 +83,12 @@ class ClaudeAdapter:
                 )
                 files.update(extract_file_mentions(text))
             for item in content if isinstance(content, list) else []:
-                if not isinstance(item, dict) or item.get("type") != "tool_use":
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "tool_result":
+                    outputs[str(item.get("tool_use_id"))] = extract_text(item.get("content")) or stringify(item.get("content"))
+                    continue
+                if item.get("type") != "tool_use":
                     continue
                 name = str(item.get("name") or "claude_tool")
                 arguments = stringify(item.get("input"))
@@ -98,6 +105,12 @@ class ClaudeAdapter:
                 if name == "Bash" and isinstance(item.get("input"), dict) and isinstance(item["input"].get("command"), str):
                     commands.append(item["input"]["command"])
 
+        parent_session_id = None
+        if path.parent.name == "subagents":
+            parent_session_id = source_session_id
+            source_session_id = f"{source_session_id}:subagent:{path.stem}"
+        for call in tool_calls:
+            call.output = outputs.get(call.id)
         cwd = cwd or _cwd_from_project_dir(project_dir)
         actual_source = _source_from_entrypoint(entrypoint)
         return NormalizedConversation(
@@ -122,6 +135,7 @@ class ClaudeAdapter:
                 "claude_entrypoint": entrypoint,
                 "claude_project_dir": project_dir,
                 "claude_client": actual_source,
+                "parent_session_id": parent_session_id,
             },
         )
 

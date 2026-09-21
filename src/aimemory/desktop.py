@@ -9,6 +9,7 @@ import secrets
 import sys
 import time
 import tomllib
+import os
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -19,6 +20,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aimemory.installer import (
     claude_desktop_available,
     claude_desktop_config_path,
+    claude_code_available,
+    claude_code_config_path,
+    codex_available,
     get_watcher_service_status,
     install_all_mcp_configs,
     install_watcher_service,
@@ -31,7 +35,7 @@ from aimemory.cloud.google_drive import GoogleDriveProvider
 from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, resolve_folder_root, validate_sync_root
 from aimemory.cloud.rclone_provider import RcloneCloudProvider
 from aimemory.cloud.destination import cloud_folder, remote_path
-from aimemory.sync.cloud_sync import cancel_active_sync
+from aimemory.sync.cloud_sync import cancel_active_sync, clear_cancel
 from aimemory.state import read_json, write_json
 from aimemory.health import watcher_health
 
@@ -93,6 +97,7 @@ class Handler(BaseHTTPRequestHandler):
             status["icloud_auth"] = RcloneCloudProvider.for_provider(
                 self.state.service.paths, "icloud-online"
             ).pending_icloud_auth()
+            status["oauth_auth"] = read_json(self.state.service.paths.state / "oauth-onedrive-online.json")
             self._send_json(status)
             return
         if self.path == "/api/identity":
@@ -123,6 +128,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"message": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def _post(self) -> None:
+        if self.path == "/api/pause-sync":
+            write_json(self.state.service.paths.state / "sync-preferences.json", {"paused": True})
+            cancel_active_sync(self.state.service.paths)
+            self._send_json({"message": "Suspension demandée. Les copies validées sont conservées."})
+            return
         if self.path == "/api/cloud-folder":
             folder = str(self.body.get("folder") or "")
             config = read_json(self.state.service.paths.state / "cloud.json")
@@ -171,13 +181,18 @@ class Handler(BaseHTTPRequestHandler):
             provider = self.body.get("provider")
             folder = self.body.get("folder", "")
             def connect():
+                current_cloud = read_json(self.state.service.paths.state / "cloud.json")
                 continuing_icloud = provider == "icloud-online" and bool(
                     self.body.get("icloud_2fa")
                     or self.body.get("icloud_resume")
                     or self.body.get("icloud_restart_after_terms")
                 )
-                if not continuing_icloud:
-                    _pull_current_destination(self.state.service)
+                if not continuing_icloud and self.body.get("cloud_selection") is None:
+                    reconnecting = self.body.get("reauthenticate") is True
+                    if reconnecting and current_cloud.get("provider") != provider:
+                        raise ValueError("La reconnexion doit utiliser le fournisseur actuel.")
+                    if not reconnecting:
+                        _pull_current_destination(self.state.service)
                 if provider == "google-drive":
                     with _cloud_config_lock(self.state.service):
                         GoogleDriveProvider(self.state.service.paths).connect(self.body.get("oauth_client"))
@@ -189,6 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                         "resume_after_approval": self.body.get("icloud_resume"),
                         "restart_after_terms": self.body.get("icloud_restart_after_terms"),
                         "onedrive_type": self.body.get("onedrive_type"),
+                        "selection": self.body.get("cloud_selection"),
                     }
                     with _cloud_config_lock(self.state.service):
                         result = RcloneCloudProvider.for_provider(self.state.service.paths, provider).connect(options)
@@ -196,6 +212,8 @@ class Handler(BaseHTTPRequestHandler):
                         "needs_2fa",
                         "needs_web_approval",
                         "needs_terms_acceptance",
+                        "needs_selection",
+                        "needs_access_retry",
                     }:
                         return result
                 elif provider in LOCAL_FOLDER_PROVIDERS:
@@ -213,6 +231,12 @@ class Handler(BaseHTTPRequestHandler):
                         )
                 else:
                     raise ValueError("Unknown provider")
+                if self.body.get("reauthenticate") is True and current_cloud.get("provider") == provider:
+                    with _cloud_config_lock(self.state.service):
+                        config = read_json(self.state.service.paths.state / "cloud.json")
+                        if current_cloud.get("connection_id"):
+                            config["connection_id"] = current_cloud["connection_id"]
+                        write_json(self.state.service.paths.state / "cloud.json", config)
                 return self.state.service.sync_now()
             self._send_json(self.state.start_job("Connexion et synchronisation", connect))
             return
@@ -229,6 +253,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"message": "Deconnecte. Les conversations locales et la sauvegarde distante sont conservees."})
             return
         if self.path == "/api/sync":
+            write_json(self.state.service.paths.state / "sync-preferences.json", {"paused": False})
+            clear_cancel(self.state.service.paths)
             self._send_json(self.state.start_job("Synchronisation", self.state.service.sync_now))
             return
         if self.path == "/api/audit":
@@ -276,14 +302,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"message": "Watcher started for this session.", "command": command})
             return
         if self.path == "/api/install-watcher":
-            result = install_watcher_service()
+            try:
+                with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=0), self.state.service.lock.acquire(timeout=0):
+                    result = install_watcher_service(force=True)
+            except Timeout:
+                raise ValueError("Attendez la fin de l'import ou suspendez la synchronisation avant de réparer la collecte.")
             installed = get_watcher_service_status()
             message = "Collecte automatique active." if installed.running else "Service installe, en attente de demarrage." if installed.installed else result.message
             self._send_json({"message": message, "result": asdict(result)})
             return
         if self.path == "/api/install-mcp":
             result = install_all_mcp_configs()
-            self._send_json({"message": "MCP configure. Relancez Codex et Claude Desktop pour charger la connexion.", "result": asdict(result)})
+            self._send_json({"message": result.message + " Relancez les clients concernés.", "result": asdict(result)})
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -318,7 +348,7 @@ def mcp_client_status() -> dict:
     return {
         "codex": {
             "label": "Codex",
-            "available": True,
+            "available": codex_available(),
             "configured": codex_mcp_configured(),
         },
         "claudeDesktop": {
@@ -331,21 +361,26 @@ def mcp_client_status() -> dict:
             "available": vscode_path is not None,
             "configured": vscode_mcp_configured(vscode_path),
         },
+        "claudeCode": {
+            "label": "Claude Code (terminal et VS Code)",
+            "available": claude_code_available(),
+            "configured": claude_desktop_mcp_configured(claude_code_config_path()),
+        },
     }
 
 
 def codex_mcp_configured() -> bool:
     try:
-        config = tomllib.loads(Path("~/.codex/config.toml").expanduser().read_text(encoding="utf-8"))
+        config = tomllib.loads((Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "config.toml").read_text(encoding="utf-8"))
         server = config.get("mcp_servers", {}).get("ai-memory", {})
         return bool(server.get("command")) and server.get("enabled", True)
     except (OSError, ValueError):
         return False
 
 
-def claude_desktop_mcp_configured() -> bool:
+def claude_desktop_mcp_configured(config_path: Path | None = None) -> bool:
     try:
-        config = json.loads(claude_desktop_config_path().read_text(encoding="utf-8"))
+        config = json.loads((config_path or claude_desktop_config_path()).read_text(encoding="utf-8"))
         server = config.get("mcpServers", {}).get("ai-memory", {})
         expected = mcp_json_server()
         return (
@@ -396,7 +431,7 @@ def _pull_current_destination(service: MemoryService) -> dict:
     if not read_json(service.paths.state / "cloud.json"):
         return {"status": "not-configured"}
     try:
-        return service.pull_cloud_now()
+        result = service.pull_cloud_now()
     except Timeout:
         cancel_active_sync(service.paths)
         lock = FileLock(str(service.paths.state / "sync.lock"), timeout=20)
@@ -407,7 +442,10 @@ def _pull_current_destination(service: MemoryService) -> dict:
             raise ValueError(
                 "La synchronisation actuelle ne s'arrête pas. Réessayez dans quelques secondes."
             ) from None
-        return service.pull_cloud_now()
+        result = service.pull_cloud_now()
+    if result.get("status") != "synced":
+        raise ValueError("L'ancienne destination n'est pas encore entièrement accessible. Le changement est suspendu pour préserver l'historique.")
+    return result
 
 
 def main(background: bool = False) -> int:

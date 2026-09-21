@@ -131,7 +131,7 @@ def test_desktop_assets_explain_multi_client_mcp_and_two_step_icloud():
     assert "icloudAwaitingWebApproval" in script
     assert "icloudAwaitingTerms" in script
     assert 'data.icloud_auth?.status === "needs_2fa"' in script
-    assert 'data.icloud_auth?.status === "needs_web_approval"' in script
+    assert '["needs_web_approval", "needs_access_retry"]' in script
     assert 'data.icloud_auth?.status === "needs_terms_acceptance"' in script
     assert "revealIcloud2FA()" in script
     assert '$("#icloud-credentials").hidden' in script
@@ -139,3 +139,37 @@ def test_desktop_assets_explain_multi_client_mcp_and_two_step_icloud():
     assert "R\\u00e9essayer iCloud" in script
     assert "J'ai accept\\u00e9, relancer" in script
     assert "VS Code" in script
+
+
+def test_reconnect_bypasses_expired_old_session_and_preserves_identity(desktop_server, monkeypatch):
+    from aimemory.state import read_json, write_json
+    state = Handler.state
+    config_path = state.service.paths.state / "cloud.json"
+    write_json(config_path, {"provider": "google-drive", "root": "Backups", "connection_id": "same-account"})
+    monkeypatch.setattr(state, "start_job", lambda name, operation: operation())
+    monkeypatch.setattr("aimemory.desktop._pull_current_destination", lambda service: pytest.fail("Expired account must not be downloaded first"))
+    monkeypatch.setattr("aimemory.desktop.GoogleDriveProvider.connect", lambda *args, **kwargs:
+                        write_json(config_path, {"provider": "google-drive", "root": "Backups", "connection_id": "renewed"}))
+    monkeypatch.setattr(state.service, "sync_now", lambda: {"status": "synced"})
+    client = HTTPConnection("127.0.0.1", desktop_server.server_port)
+    client.request("POST", "/api/connect-cloud", body=json.dumps({"provider": "google-drive", "reauthenticate": True}),
+                   headers={"X-AI-Memory-Token": state.token})
+    response = client.getresponse()
+    assert response.status == 200, response.read()
+    response.read()
+    client.close()
+    assert read_json(config_path)["connection_id"] == "same-account"
+
+
+def test_pause_does_not_wait_for_desktop_job(desktop_server):
+    from aimemory.state import read_json
+    state = Handler.state
+    state.job = {"running": True}
+    client = HTTPConnection("127.0.0.1", desktop_server.server_port)
+    client.request("POST", "/api/pause-sync", body="{}", headers={"X-AI-Memory-Token": state.token})
+    response = client.getresponse()
+    assert response.status == 200
+    response.read()
+    client.close()
+    assert read_json(state.service.paths.state / "sync-preferences.json")["paused"]
+    assert (state.service.paths.state / "sync-cancel.json").exists()

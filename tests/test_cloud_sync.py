@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from filelock import FileLock
 
 from aimemory.config import AppPaths
 from aimemory.state import read_json, write_json
@@ -51,7 +52,7 @@ def test_upload_counter_counts_only_completed_files(tmp_path, monkeypatch):
             uploaded.append(relative)
 
     monkeypatch.setattr("aimemory.sync.cloud_sync._remote_archive", lambda *args: Remote())
-    status = CloudSync(SimpleNamespace(paths=paths)).run()
+    status = CloudSync(SimpleNamespace(paths=paths, lock=FileLock(str(paths.state / "operations.lock")))).run()
     assert status["status"] == "synced"
     assert status["transfers"] == status["object_count"] == 2
 
@@ -81,7 +82,7 @@ def test_bulk_uploads_are_batched_and_counted_after_completion(tmp_path, monkeyp
             raise AssertionError("No downloads expected")
 
     monkeypatch.setattr("aimemory.sync.cloud_sync._remote_archive", lambda *args: Remote())
-    status = CloudSync(SimpleNamespace(paths=paths)).run()
+    status = CloudSync(SimpleNamespace(paths=paths, lock=FileLock(str(paths.state / "operations.lock")))).run()
 
     assert [len(batch) for batch in batches] == [50, 50, 21]
     assert status["status"] == "synced"

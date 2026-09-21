@@ -69,8 +69,9 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          pyinstaller --name "AI Memory" --onedir --windowed --collect-all mcp --collect-data aimemory --osx-bundle-identifier io.github.jujudnt.ai-memory src/aimemory/bootstrap.py
-          pyinstaller --name ai-memory-cli --onefile --collect-all mcp --collect-data aimemory src/aimemory/bootstrap.py
+          SIGNING_IDENTITY="Developer ID Application: Julia Denat ($APPLE_TEAM_ID)"
+          pyinstaller --name "AI Memory" --onedir --windowed --codesign-identity "$SIGNING_IDENTITY" --collect-all mcp --collect-data aimemory --osx-bundle-identifier io.github.jujudnt.ai-memory src/aimemory/bootstrap.py
+          pyinstaller --name ai-memory-cli --onefile --codesign-identity "$SIGNING_IDENTITY" --collect-all mcp --collect-data aimemory src/aimemory/bootstrap.py
           /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "dist/AI Memory.app/Contents/Info.plist"
           cp "dist/ai-memory-cli" "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"
           cp vendor/rclone "dist/AI Memory.app/Contents/MacOS/rclone"
@@ -84,6 +85,7 @@ jobs:
           done
           codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "dist/AI Memory.app"
           codesign --verify --deep --strict --verbose=2 "dist/AI Memory.app"
+          python scripts/smoke_packaged.py "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"
       - name: Build Windows app
         if: runner.os == 'Windows'
         run: pyinstaller --name "AI Memory" --onefile --collect-all mcp --collect-data aimemory --add-binary "vendor/rclone.exe;." --add-data "vendor/rclone-COPYING.txt;." src/aimemory/bootstrap.py

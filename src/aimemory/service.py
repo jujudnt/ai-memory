@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,6 +40,8 @@ class MemoryService:
         self.db = MemoryDatabase(self.paths.db / "memory.sqlite")
         self.search_service = SearchService(self.db)
         self.lock = FileLock(str(self.paths.state / "operations.lock"), timeout=1)
+        self._storage_cache = None
+        self._storage_checked = 0.0
 
     def import_codex(self, codex_home: Path | None = None, force: bool = False) -> ImportResult:
         with self.lock:
@@ -68,6 +71,7 @@ class MemoryService:
         manifest_path = self.paths.state / "source-manifest.json"
         manifest = read_json(manifest_path)
         synced_objects = read_json(self.paths.state / "synced-objects.json")
+        indexed_ids = {item["id"] for item in self.db.archive_entries()}
         imported = 0
         skipped = 0
         errors = []
@@ -82,7 +86,7 @@ class MemoryService:
                     (self.paths.archive / entry.get("raw_path", "missing")).is_file()
                     or bool(synced_objects.get(entry.get("raw_path", "")))
                 )
-                and self.db.get_conversation_row(entry.get("conversation_id", ""))
+                and entry.get("conversation_id") in indexed_ids
             ):
                 skipped += 1
                 continue
@@ -90,8 +94,18 @@ class MemoryService:
                 stat = session.path.stat()
                 raw = session.path.read_bytes()
                 stat_hash = hashlib.sha256(raw).hexdigest()
+                if (not force and stat_hash == entry.get("sha256")
+                        and entry.get("parser_version") == getattr(adapter, "parser_version", 2)
+                        and entry.get("conversation_id") in indexed_ids
+                        and ((self.paths.archive / entry.get("raw_path", "missing")).is_file()
+                             or synced_objects.get(entry.get("raw_path", "")))):
+                    entry.update(mtime_ns=stat.st_mtime_ns, size=len(raw))
+                    write_json(manifest_path, manifest)
+                    skipped += 1
+                    continue
                 conversation = adapter.parse_session(session.path, raw)
-                raw_path = write_raw(self.paths.archive, conversation.id, raw, stat_hash, entry)
+                previous = dict(entry, raw_backed_up=bool(synced_objects.get(entry.get("raw_path", ""))))
+                raw_path = write_raw(self.paths.archive, conversation.id, raw, stat_hash, previous)
                 conversation.metadata.update(source_sha256=stat_hash, raw_path=raw_path.as_posix())
                 # Preserve every source variant; the active index selects the latest revision.
                 self.accept_conversation(conversation)
@@ -105,8 +119,10 @@ class MemoryService:
                     "sha256": stat_hash, "raw_path": raw_path.as_posix(), "size": len(raw),
                     "mtime_ns": stat.st_mtime_ns, "parser_version": getattr(adapter, "parser_version", 2),
                     "messages": len(conversation.messages), "tool_calls": len(conversation.tool_calls),
+                    "raw_depth": entry.get("raw_depth", 0) + 1 if raw_path.name.endswith(".delta.json.gz") else 0,
                 }
                 imported += 1
+                indexed_ids.add(conversation.id)
             except ValueError as exc:
                 if "session is empty" in str(exc):
                     skipped += 1
@@ -121,9 +137,14 @@ class MemoryService:
         existing = self.get_conversation(conversation.id)
         if existing and _conversation_content_digest(existing) == _conversation_content_digest(conversation):
             return False
+        def legacy_identity(value):
+            version = value.metadata.get("parser_version", 0)
+            return ((value.source in {"codex", "vscode-codex"} and version < 2) or
+                    ("claude" in value.source and version < 5 and
+                     "/subagents/" in value.metadata.get("source_path", "")))
         def revision_key(value):
             digest = hashlib.sha256(json.dumps(value.to_dict(), sort_keys=True).encode()).hexdigest()
-            return (value.metadata.get("parser_version", 0), value.updated_at or "",
+            return (not legacy_identity(value), value.updated_at or "", value.metadata.get("parser_version", 0),
                     len(value.messages) + len(value.tool_calls), digest)
         if existing and revision_key(existing) > revision_key(conversation):
             # Keep a divergent/older revision without replacing the current index.
@@ -185,21 +206,30 @@ class MemoryService:
         status["archive"] = str(self.paths.archive)
         status["archive_count"] = status["conversation_count"]
         config = read_json(self.paths.state / "cloud.json")
+        if self._storage_cache is None or time.monotonic() - self._storage_checked > 15:
+            self._storage_cache = {
+                "archive_bytes": folder_bytes(self.paths.archive),
+                "normalized_bytes": folder_bytes(self.paths.archive / "sources"),
+                "raw_bytes": folder_bytes(self.paths.archive / "raw"),
+                "revisions_bytes": folder_bytes(self.paths.archive / "snapshots"),
+                "cache_bytes": folder_bytes(self.paths.cache),
+                "database_bytes": sum(p.stat().st_size for p in self.paths.db.glob("memory.sqlite*")),
+                "total_bytes": folder_bytes(self.paths.home),
+            }
+            self._storage_checked = time.monotonic()
         status["storage"] = {
             "provider": config.get("provider", "local-folder"),
             "provider_label": provider_label(config.get("provider")),
             "home": str(self.paths.home),
             "archive": str(self.paths.archive),
             "cloud_sync": "configured" if config else "not-configured",
-            "archive_bytes": folder_bytes(self.paths.archive),
-            "normalized_bytes": folder_bytes(self.paths.archive / "sources"),
-            "raw_bytes": folder_bytes(self.paths.archive / "raw"),
-            "revisions_bytes": folder_bytes(self.paths.archive / "snapshots"),
-            "database_bytes": sum(p.stat().st_size for p in self.paths.db.glob("memory.sqlite*")),
-            "total_bytes": folder_bytes(self.paths.home),
+            **self._storage_cache,
             "remote": config.get("root", "AI-Memory"),
         }
         status["sync"] = read_json(self.paths.state / "sync-status.json")
+        status["sync_paused"] = read_json(self.paths.state / "sync-preferences.json").get("paused", False)
+        from aimemory import __version__
+        status["version"] = __version__
         status["audit"] = read_json(self.paths.state / "audit.json")
         status["cleanup"] = read_json(self.paths.state / "cleanup-status.json")
         status["retention"] = read_json(self.paths.state / "retention-status.json")

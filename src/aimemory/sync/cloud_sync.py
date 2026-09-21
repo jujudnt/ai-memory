@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 from filelock import FileLock
 
@@ -18,8 +19,9 @@ from aimemory.cloud.google_drive import rclone_binary
 from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, validate_sync_root
 from aimemory.cloud.rclone_provider import RcloneCloudProvider
 from aimemory.cloud.destination import remote_path
+from aimemory.cloud.errors import CloudError, error_category
 from aimemory.archive.json_archive import JsonArchive
-from aimemory.archive.raw_backup import RAW_PATTERN, read_raw
+from aimemory.archive.raw_backup import RAW_PATTERN, RawIntegrityError, load_delta, validate_raw
 from aimemory.state import atomic_write, now, read_json, write_json
 
 OBJECT_PATTERN = re.compile(
@@ -46,27 +48,48 @@ class CloudSync:
             status = read_json(self.status_path)
             status.update(status="preparing", started_at=now(), error=None, requires_action=False,
                           transfers=0, totalTransfers=0, bytes=0, totalBytes=0, speed=0)
+            status_lock = threading.RLock()
+            last_beat = [0.0]
             def progress(phase, **details):
                 check_cancelled(self.paths)
-                status.update(status=phase, heartbeat_at=now(), **details)
-                if "error" not in details:
-                    status["error"] = None
-                write_json(self.status_path, status)
+                with status_lock:
+                    status.update(status=phase, heartbeat_at=now(), **details)
+                    if "error" not in details:
+                        status["error"] = None
+                    write_json(self.status_path, status)
+            def heartbeat():
+                check_cancelled(self.paths)
+                if time.monotonic() - last_beat[0] < 2:
+                    return
+                last_beat[0] = time.monotonic()
+                with status_lock:
+                    progress(status["status"])
             try:
                 progress("preparing")
                 remote = _remote_archive(self.paths, config)
+                remote.heartbeat = heartbeat
                 known = read_json(self.paths.state / "synced-objects.json")
                 remote_identity = _remote_identity(config)
                 previous_identity = known.pop("__remote_identity__", None)
                 destination_changed = bool(previous_identity and previous_identity != remote_identity)
                 if destination_changed:
-                    known = {}
+                    known = read_json(self.paths.state / "destinations" / f"{hashlib.sha256(remote_identity.encode()).hexdigest()}.json")
+                def checkpoint():
+                    saved = {**known, "__remote_identity__": remote_identity}
+                    write_json(self.paths.state / "synced-objects.json", saved)
+                    write_json(self.paths.state / "destinations" / f"{hashlib.sha256(remote_identity.encode()).hexdigest()}.json", saved)
                 remote_objects = remote.list(progress)
                 current_sources = _current_source_paths(self.service)
-                redundant_snapshots = _redundant_snapshot_objects(self.paths, current_sources)
+                redundant_snapshots = set() if pull_only or (self.paths.state / "migration.json").exists() else _redundant_snapshot_objects(self.paths, current_sources)
                 remote_redundant = redundant_snapshots & remote_objects
                 usable_remote_objects = remote_objects - remote_redundant
                 known = {relative: True for relative in known if relative in usable_remote_objects}
+                migration_path = self.paths.state / "migration.json"
+                migration = read_json(migration_path)
+                if pull_only:
+                    migration = {"status": "preparing", "source_identity": remote_identity,
+                                 "objects": sorted(usable_remote_objects), "started_at": now()}
+                    write_json(migration_path, migration)
                 local_objects = list(
                     _iter_local_objects(
                         self.paths.archive,
@@ -78,6 +101,13 @@ class CloudSync:
                 uploads = [] if pull_only else [
                     (relative, path) for relative, path in local_objects if relative not in usable_remote_objects
                 ]
+                available = usable_remote_objects | {relative for relative, _ in uploads}
+                for relative, path in uploads:
+                    if relative.endswith(".delta.json.gz"):
+                        with gzip.open(path, "rb") as stream:
+                            parent = json.load(stream).get("parent")
+                        if parent not in available:
+                            raise CloudError("Une base de sauvegarde manque sur cette destination. Restaurez l'ancienne destination avant de migrer l'historique.", "integrity")
                 if uploads and config["provider"] in LOCAL_FOLDER_PROVIDERS:
                     _ensure_available_space_for_files((path for _, path in uploads), remote.root)
                 if uploads and hasattr(remote, "upload_many"):
@@ -95,6 +125,7 @@ class CloudSync:
                         for relative, _ in batch:
                             usable_remote_objects.add(relative)
                             known[relative] = True
+                        checkpoint()
                         completed += len(batch)
                         progress(
                             "uploading",
@@ -109,6 +140,7 @@ class CloudSync:
                         remote.upload(path, relative)
                         usable_remote_objects.add(relative)
                         known[relative] = True
+                        checkpoint()
                         progress("uploading", object_count=len(usable_remote_objects), transfers=index,
                                  totalTransfers=len(uploads))
                 if not uploads:
@@ -120,19 +152,33 @@ class CloudSync:
                         known.pop(relative, None)
                 progress("verifying")
                 indexed = 0
+                verified_raw = {}
                 incoming = self.paths.cache / "incoming"
-                shutil.rmtree(incoming, ignore_errors=True)
-                downloads = sorted(path for path in usable_remote_objects if path not in known)
+                downloads = sorted(
+                    (path for path in usable_remote_objects
+                     if path not in known or (pull_only and not (self.paths.archive / path).is_file())),
+                    key=lambda path: (not path.startswith("snapshots/"), path),
+                )
                 for index, relative_string in enumerate(downloads, start=1):
                     check_cancelled(self.paths)
                     relative = Path(relative_string)
                     if not _allowed_object(relative_string):
                         raise ValueError("Unexpected object in cloud archive")
                     progress("downloading", object_count=len(known), transfers=index - 1, totalTransfers=len(downloads))
-                    path = incoming / relative
-                    remote.download(relative_string, path)
-                    payload = path.read_bytes()
+                    if hasattr(remote, "download_many") and not ((self.paths.archive if relative.parts[0] == "raw" else incoming) / relative).is_file():
+                        batch = [item for item in downloads[index - 1:index + 19]
+                                 if item.startswith(relative.parts[0] + "/")]
+                        root = self.paths.archive if relative.parts[0] == "raw" else incoming
+                        batch = [item for item in batch if not (root / item).is_file()]
+                        remote.download_many(batch, root)
+                    # Raw dependencies live directly in the archive: never duplicate a
+                    # whole history in both incoming/ and archive/ during a transfer.
+                    path = (self.paths.archive if relative.parts[0] == "raw" else incoming) / relative
+                    _check_download_space(self.paths)
+                    if not path.is_file():
+                        remote.download(relative_string, path)
                     if relative.parts[0] == "snapshots":
+                        payload = path.read_bytes()
                         if hashlib.sha256(payload).hexdigest() != path.name.split(".")[0]:
                             path.unlink()
                             _wait_for_incomplete_icloud_item(remote, relative_string)
@@ -142,94 +188,107 @@ class CloudSync:
                             raise ValueError("Cloud archive identity mismatch")
                         # Skip already present local snapshots; remote revisions are indexed.
                         legacy_codex = conversation.source == "codex" and conversation.metadata.get("parser_version", 0) < 2
-                        if not legacy_codex and not (self.paths.archive / relative).exists():
+                        if not legacy_codex:
                             with self.service.lock.acquire(timeout=60):
                                 indexed += int(self.service.accept_conversation(conversation))
                     else:
                         try:
                             _hydrate_raw_dependencies(
-                                incoming,
+                                self.paths.archive,
                                 relative_string,
                                 remote,
                                 usable_remote_objects,
                             )
-                            read_raw(incoming, relative.as_posix())
+                            validate_raw(self.paths.archive, relative.as_posix(), verified_raw, heartbeat)
                         except CloudFolderPending:
                             raise
-                        except (OSError, ValueError, KeyError, json.JSONDecodeError):
-                            path.unlink()
+                        except (gzip.BadGzipFile, EOFError, ValueError, KeyError, json.JSONDecodeError) as exc:
+                            invalid = self.paths.archive / exc.relative if isinstance(exc, RawIntegrityError) else path
+                            invalid.unlink(missing_ok=True)
                             _wait_for_incomplete_icloud_item(remote, relative_string)
                             raise ValueError("Raw cloud backup checksum mismatch. Retry synchronization.")
                     target = self.paths.archive / relative
-                    if not target.exists():
-                        atomic_write(target, payload)
+                    if path != target:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(path, target)
                     known[relative_string] = True
+                    checkpoint()
                     progress("downloading", object_count=len(known), transfers=index, totalTransfers=len(downloads))
                     if len(known) % 10 == 0:
                         progress("verifying", object_count=len(known))
                 for relative_string, _ in local_objects:
                     if relative_string in usable_remote_objects:
                         known[relative_string] = True
-                known["__remote_identity__"] = remote_identity
-                write_json(self.paths.state / "synced-objects.json", known)
-                retention = prune_synced_local_copies(
-                    self.paths,
-                    known,
-                    redundant_snapshots=redundant_snapshots,
-                    current_source_paths=_current_source_paths(self.service),
+                checkpoint()
+                # Old versions staged raw files twice. Remove only a verified
+                # duplicate, never the sole unconfirmed copy or a migration file.
+                for relative_string in known:
+                    staged = incoming / relative_string
+                    if staged.is_file() and (self.paths.archive / relative_string).is_file():
+                        staged.unlink()
+                migration_complete = (
+                    migration.get("source_identity") != remote_identity
+                    and set(migration.get("objects", [])) <= usable_remote_objects
                 )
+                if pull_only:
+                    migration.update(status="prepared", prepared_at=now())
+                    write_json(migration_path, migration)
+                elif migration and migration_complete:
+                    migration_path.unlink(missing_ok=True)
+                # A local cloud folder is not proof of upload to the provider.
+                can_prune = config["provider"] not in {"icloud-drive", "onedrive", "dropbox"}
+                retention = {}
+                if can_prune and not pull_only and (not migration or migration_complete):
+                    with self.service.lock.acquire(timeout=60):
+                        retention = prune_synced_local_copies(
+                            self.paths, known, redundant_snapshots=redundant_snapshots,
+                            current_source_paths=_current_source_paths(self.service),
+                        )
                 write_json(
                     self.paths.state / "semantic-cleanup.json",
                     {"version": 1, "completed_at": now(), "removed_count": len(redundant_snapshots)},
                 )
                 status.update(status="synced", last_success_at=now(), indexed=indexed,
-                              object_count=len(usable_remote_objects), retention=retention, error=None)
+                              object_count=len(usable_remote_objects), retention=retention, error=None,
+                              failures=0, retry_after=None,
+                              confirmation="local_folder" if not can_prune else "remote")
             except CloudFolderPending as exc:
                 status.update(status="waiting_local_cloud", error=str(exc), heartbeat_at=now(),
                               requires_action=False, message=str(exc))
             except Exception as exc:
-                status.update(status="error", error=str(exc), failed_at=now())
-                # A background retry must not repeatedly prompt the user's Apple devices.
-                if config.get("provider") == "icloud-online":
-                    status["requires_action"] = True
+                category = getattr(exc, "category", "quota" if isinstance(exc, OSError) and exc.errno == errno.ENOSPC
+                                   else "integrity" if isinstance(exc, ValueError) else "transient")
+                failures = status.get("failures", 0) + 1
+                status.update(status="paused" if isinstance(exc, SyncCancelled) else "error",
+                              error=str(exc), failed_at=now(), error_category=category,
+                              requires_action=category == "auth", failures=failures,
+                              retry_after=time.time() + min(900, 30 * 2 ** min(failures, 5)))
                 raise
             finally:
-                shutil.rmtree(self.paths.cache / "incoming", ignore_errors=True)
-                shutil.rmtree(self.paths.cache / "exchange", ignore_errors=True)
                 write_json(self.status_path, status)
             return status
 
 
+class SyncCancelled(RuntimeError):
+    pass
+
+
+def _check_download_space(paths, required: int = 0) -> None:
+    if shutil.disk_usage(paths.home).free < required + 256 * 1024 * 1024:
+        raise CloudError("Espace local insuffisant pour recevoir les archives. Libérez de l'espace puis reprenez.", "quota")
+
+
 def cancel_active_sync(paths) -> None:
     write_json(paths.state / "sync-cancel.json", {"cancelled_at": now()})
-    _terminate_rclone(paths)
 
 
 def check_cancelled(paths) -> None:
     if (paths.state / "sync-cancel.json").exists():
-        raise RuntimeError("Synchronisation annulée pour changer de destination.")
+        raise SyncCancelled("Synchronisation suspendue. Les copies validées sont conservées.")
 
 
 def clear_cancel(paths) -> None:
     (paths.state / "sync-cancel.json").unlink(missing_ok=True)
-
-
-def _terminate_rclone(paths) -> None:
-    config = str(paths.home / "credentials" / "rclone.conf")
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "rclone.exe"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        return
-    subprocess.run(
-        ["pkill", "-f", f"rclone.*{config}"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
 
 
 def _ensure_available_space(source: Path, destination: Path) -> None:
@@ -377,7 +436,7 @@ def _current_source_paths(service) -> set[Path]:
         return set()
     return {
         Path(item["archive_path"]).resolve()
-        for item in service.db.list_conversations(limit=1_000_000)
+        for item in service.db.archive_entries()
         if item.get("archive_path")
     }
 
@@ -455,7 +514,9 @@ def _hydrate_raw_dependencies(
                 _wait_for_incomplete_icloud_item(remote, current)
                 raise ValueError("Raw backup dependency missing from cloud")
             remote.download(current, path)
-        payload = json.loads(gzip.decompress(path.read_bytes()))
+        if hasattr(remote, "heartbeat"):
+            remote.heartbeat()
+        payload = load_delta(incoming, current)
         parent = Path(payload["parent"]).as_posix()
         if not re.fullmatch(RAW_PATTERN, parent) or parent not in remote_objects:
             if re.fullmatch(RAW_PATTERN, parent):
@@ -614,10 +675,15 @@ class RcloneArchiveRemote:
         self.provider = provider
         self.remote = remote
         self.config = paths.home / "credentials" / "rclone.conf"
+        self.heartbeat = lambda: None
+        self.sizes = {}
 
     def list(self, progress) -> set[str]:
-        output = self._run(["lsf", self.remote, "--recursive", "--files-only"], timeout=600)
-        objects = {line.strip() for line in output.splitlines() if _allowed_object(line.strip())}
+        output = self._run(["lsjson", self.remote, "--recursive", "--files-only"], timeout=600)
+        entries = json.loads(output)
+        self.sizes = {entry["Path"]: max(0, entry.get("Size", 0)) for entry in entries
+                      if _allowed_object(entry.get("Path", ""))}
+        objects = set(self.sizes)
         progress("preparing", object_count=len(objects))
         return objects
 
@@ -639,7 +705,26 @@ class RcloneArchiveRemote:
             selection.unlink(missing_ok=True)
 
     def download(self, relative: str, local_path: Path) -> None:
-        self._run(["copyto", f"{self.remote}/{relative}", str(local_path)], timeout=600)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        partial = local_path.with_name("." + local_path.name + ".partial")
+        try:
+            _check_download_space(self.paths, self.sizes.get(relative, 0))
+            self._run(["copyto", f"{self.remote}/{relative}", str(partial)], timeout=600)
+            os.replace(partial, local_path)
+        finally:
+            partial.unlink(missing_ok=True)
+
+    def download_many(self, relatives: list[str], destination: Path) -> None:
+        if not relatives:
+            return
+        _check_download_space(self.paths, sum(self.sizes.get(item, 0) for item in relatives))
+        selection = self.paths.cache / "cloud-download-objects.txt"
+        atomic_write(selection, ("\n".join(relatives) + "\n").encode())
+        try:
+            self._run(["copy", self.remote, str(destination), "--files-from", str(selection),
+                       "--ignore-existing", "--transfers", "2"], timeout=1800)
+        finally:
+            selection.unlink(missing_ok=True)
 
     def delete_many(self, relatives: set[str]) -> None:
         selection = self.paths.cache / "redundant-cloud-objects.txt"
@@ -650,7 +735,7 @@ class RcloneArchiveRemote:
             selection.unlink(missing_ok=True)
 
     def _run(self, args: list[str], timeout: int) -> str:
-        result = subprocess.run(
+        process = subprocess.Popen(
             [
                 rclone_binary(),
                 "--config",
@@ -666,17 +751,32 @@ class RcloneArchiveRemote:
                 *args,
             ],
             stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-        if result.returncode:
+        started = time.monotonic()
+        try:
+            while True:
+                check_cancelled(self.paths)
+                self.heartbeat()
+                try:
+                    stdout, stderr = process.communicate(timeout=2)
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() - started > timeout:
+                        raise CloudError("Le transfert a dépassé le délai. Reprise automatique prévue.")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        if process.returncode:
             if self.provider == "google-drive":
                 from aimemory.cloud.google_drive import _friendly_google_error
 
-                raise RuntimeError(_friendly_google_error(result.stderr, result.returncode))
+                raise CloudError(_friendly_google_error(stderr, process.returncode), error_category(stderr))
             from aimemory.cloud.rclone_provider import _friendly_rclone_error
 
-            raise RuntimeError(_friendly_rclone_error(self.provider, result.stderr, result.returncode))
-        return result.stdout
+            raise CloudError(_friendly_rclone_error(self.provider, stderr, process.returncode), error_category(stderr))
+        return stdout

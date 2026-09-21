@@ -29,7 +29,7 @@
     </header>
     <main>
       <section class="overview" aria-labelledby="overview-title">
-        <div class="eyebrow">VOTRE M&Eacute;MOIRE CODEX</div>
+        <div class="eyebrow">VOTRE M&Eacute;MOIRE IA</div>
         <div class="overview-heading">
           <div>
             <h1 id="overview-title">Vos conversations.</h1>
@@ -108,6 +108,10 @@
           >
             <i data-lucide="refresh-cw"></i>
           </button>
+          <button class="icon-button" data-action="pause-sync" id="sync-pause"
+            title="Suspendre les transferts" aria-label="Suspendre les transferts" hidden>
+            <i data-lucide="pause"></i>
+          </button>
         </div>
       </section>
       <div id="message" role="status" hidden></div>
@@ -122,7 +126,7 @@
       </section>
       <footer>
         <span><span class="tiny-dot"></span> Stockage local</span
-        ><span id="footer-size"></span><span>v0.4.20</span>
+        ><span id="footer-size"></span><span id="app-version"></span>
       </footer>
     </main>
     <dialog id="settings" aria-labelledby="settings-title">
@@ -204,6 +208,9 @@
                 <option value="personal">Personnel</option>
                 <option value="business">Professionnel ou scolaire</option>
               </select>
+              <label id="cloud-selection-label" hidden>Drive de sauvegarde
+                <select id="cloud-selection"></select>
+              </label>
             </div>
             <div id="icloud-fields" hidden>
               <div id="icloud-credentials">
@@ -253,6 +260,7 @@
                   >Ouvrir iCloud.com</a
                 >
               </div>
+              <p id="icloud-access-retry" class="muted small" hidden></p>
               <p class="muted small" id="icloud-flow-help">
                 &Eacute;tape 1 : saisissez Apple ID et mot de passe, puis
                 connectez. &Eacute;tape 2 : quand Apple affiche le code sur
@@ -299,8 +307,9 @@
             <summary>G&eacute;rer la connexion</summary>
             <p id="cloud-last" class="muted small"></p>
             <button class="compact" id="cloud-switch">
-              Reconnecter ou changer
+              Changer de destination
             </button>
+            <button class="compact" id="cloud-reconnect">Reconnecter ce compte</button>
             <button class="compact danger" data-action="disconnect-cloud">
               D&eacute;connecter
             </button>
@@ -310,9 +319,13 @@
           <h3>Stockage local</h3>
           <dl class="storage-details">
             <div>
-              <dt>Conversations locales</dt>
+              <dt>Conversations et archives</dt>
               <dd id="settings-archive-size"></dd>
             </div>
+            <div><dt>Conversations consultables</dt><dd id="normalized-size"></dd></div>
+            <div><dt>Sources originales</dt><dd id="raw-size"></dd></div>
+            <div><dt>Versions archiv&eacute;es</dt><dd id="revisions-size"></dd></div>
+            <div><dt>Cache et transferts en attente</dt><dd id="cache-size"></dd></div>
             <div>
               <dt>Index de recherche</dt>
               <dd id="db-size"></dd>

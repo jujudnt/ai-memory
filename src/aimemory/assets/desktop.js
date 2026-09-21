@@ -5,6 +5,8 @@ let current = null;
 let requestBusy = false;
 let lastJobMessage = "";
 let switchingCloud = false;
+let reauthenticating = false;
+let providerChosen = false;
 let icloudAwaiting2FA = false;
 let icloudAwaitingWebApproval = false;
 let icloudAwaitingTerms = false;
@@ -95,7 +97,7 @@ function revealIcloudWebApproval() {
   $("#icloud-2fa").value = "";
   settings();
   updateProviderFields();
-  notice(icloudWebApprovalMessage);
+  notice(current?.icloud_auth?.status === "needs_access_retry" ? current.icloud_auth.message : icloudWebApprovalMessage);
 }
 function revealIcloudTerms() {
   if ($("#provider").value !== "icloud-online") return;
@@ -120,9 +122,12 @@ function notice(message, error = false) {
 function busy() {
   const locked = requestBusy || !!current?.job?.running;
   document.querySelectorAll("[data-action]").forEach((button) => {
-    button.disabled =
-      locked || (button.dataset.action === "sync" && current?.sync_active);
+    const name = button.dataset.action;
+    const independent = ["open-folder", "pause-sync"].includes(name);
+    button.disabled = (independent ? requestBusy : locked) ||
+      (["sync", "install-watcher"].includes(name) && current?.sync_active);
   });
+  $("#menubar-login").disabled = requestBusy;
 }
 function settings() {
   if (!$("#settings").open) $("#settings").showModal();
@@ -167,6 +172,10 @@ function render(data) {
   );
   $("#archive-size").textContent = size(storage.archive_bytes);
   $("#settings-archive-size").textContent = size(storage.archive_bytes);
+  for (const [id, key] of [["normalized", "normalized_bytes"], ["raw", "raw_bytes"],
+                          ["revisions", "revisions_bytes"], ["cache", "cache_bytes"]])
+    $(`#${id}-size`).textContent = size(storage[key]);
+  $("#app-version").textContent = data.version ? `v${data.version}` : "";
   $("#db-size").textContent = size(storage.database_bytes);
   $("#total-size").textContent = size(storage.total_bytes);
   const retention = data.retention || {};
@@ -183,15 +192,17 @@ function render(data) {
     (health.state === "stale"
       ? `Aucune collecte confirm\u00e9e depuis ${date(watcher.last_success_at || watcher.started_at)}`
       : `Dernier scan r\u00e9ussi ${elapsed(watcher.last_success_at)}${installed ? " \u00b7 D\u00e9marrage automatique" : ""}`);
-  $("#watcher-enable").hidden = !!watcher.running && !!installed;
-  $("#watcher-enable").textContent = watcher.running
+  $("#watcher-enable").hidden = healthy && !!installed;
+  $("#watcher-enable").textContent = ["error", "stale"].includes(health.state)
+    ? "R\u00e9parer" : watcher.running
     ? "Automatiser"
     : "Activer";
   $("#watcher-check").hidden = !healthy || !installed;
   $("#autostart-status").textContent = installed
     ? "Service install\u00e9"
     : "Non configur\u00e9e";
-  $("#autostart-enable").hidden = !!installed;
+  $("#autostart-enable").hidden = !!installed && healthy;
+  $("#autostart-enable").textContent = installed ? "R\u00e9parer" : "Activer";
   const mcpClients = Object.values(data.mcp_clients || {}).filter(
     (client) => client.available,
   );
@@ -202,11 +213,12 @@ function render(data) {
     .filter((client) => !client.configured)
     .map((client) => client.label);
   $("#mcp-status").textContent = data.mcp_configured
-    ? `Actif dans ${readyMcpClients.join(", ")}`
+    ? `Configur\u00e9 pour ${readyMcpClients.join(", ")}`
     : missingMcpClients.length
       ? `\u00c0 activer pour ${missingMcpClients.join(", ")}`
       : "Non configur\u00e9";
-  $("#mcp-enable").hidden = !!data.mcp_configured;
+  $("#mcp-enable").hidden = false;
+  $("#mcp-enable").textContent = data.mcp_configured ? "R\u00e9parer" : "Activer";
   $("#menubar-setting").hidden = !data.menubar_available;
   $("#menubar-login").checked = !!data.menubar_login;
   $(".local-label").lastChild.textContent = data.menubar_available
@@ -227,6 +239,7 @@ function render(data) {
     synced: "\u00c0 jour",
     error: "Erreur de synchronisation",
     waiting_local_cloud: "En attente du dossier cloud local",
+    paused: "Transferts suspendus",
   };
   let cloudText = configured
     ? phases[sync.status] || "En attente de synchronisation"
@@ -239,10 +252,15 @@ function render(data) {
     else if (sync.totalBytes > 0)
       cloudText += ` \u00b7 ${size(sync.bytes)} / ${size(sync.totalBytes)} \u00b7 ${size(sync.speed)}/s`;
   }
-  else if (configured && !["error", "synced", "waiting_local_cloud"].includes(sync.status))
+  else if (configured && !["error", "synced", "paused", "waiting_local_cloud"].includes(sync.status))
     cloudText = "En attente de synchronisation";
   if (sync.error && configured) cloudText += ` : ${sync.error}`;
   if (sync.requires_action) cloudText += " Relance manuelle requise.";
+  else if (sync.status === "error" && sync.retry_after)
+    cloudText += " Nouvelle tentative automatique pr\u00e9vue.";
+  if (data.sync_paused && !data.sync_active) cloudText = "Transferts suspendus";
+  if (sync.status === "synced" && sync.confirmation === "local_folder")
+    cloudText = `Copie locale \u00e0 jour \u00b7 envoi cloud g\u00e9r\u00e9 par ${provider}`;
   if (data.sync_active && age(sync.heartbeat_at || sync.started_at) > 180)
     cloudText = `Synchronisation \u00e0 v\u00e9rifier \u00b7 derni\u00e8re activit\u00e9 ${elapsed(sync.heartbeat_at || sync.started_at)}`;
   $("#cloud-detail").textContent = cloudText;
@@ -257,6 +275,9 @@ function render(data) {
   else $("#cloud-progress").removeAttribute("value");
   $("#cloud-setup").hidden = configured;
   $('[data-action="sync"]').hidden = !configured;
+  $("#sync-pause").hidden = !configured || !data.sync_active;
+  $('[data-action="sync"]').title = data.sync_paused ? "Reprendre les transferts" : "Synchroniser maintenant";
+  $('[data-action="sync"]').setAttribute("aria-label", $('[data-action="sync"]').title);
   $("#cloud-connect-form").hidden = configured && !switchingCloud;
   $("#cloud-manage").hidden = !configured;
   $("#cloud-folder-settings").hidden = !configured;
@@ -271,8 +292,11 @@ function render(data) {
   $("#cloud-summary").textContent = configured
     ? `${provider} \u00b7 ${storage.remote}`
     : "Aucune destination connect\u00e9e";
+  $("#cloud-reconnect").hidden = !["google-drive", "icloud-online", "onedrive-online", "dropbox-online"].includes(storage.provider);
   $("#cloud-last").textContent =
-    `Derni\u00e8re sauvegarde compl\u00e8te : ${date(sync.last_success_at)}. ${sync.object_count || 0} objets v\u00e9rifi\u00e9s. Les originaux et anciennes versions confirm\u00e9s dans le cloud sont nettoy\u00e9s du Mac; les conversations courantes et l'index restent disponibles localement.`;
+    `Dernier transfert termin\u00e9 : ${date(sync.last_success_at)}. ${sync.object_count || 0} objets. ` +
+    (sync.confirmation === "local_folder" ? "Copies locales conserv\u00e9es : l'envoi au cloud d\u00e9pend du client du Mac." :
+      "Seules les archives confirm\u00e9es sur cette destination sont nettoy\u00e9es du Mac.");
   const audit = data.audit || {};
   $("#audit-detail").textContent = audit.checked_at
     ? `${audit.verified_files}/${audit.files} sources v\u00e9rifi\u00e9es \u00b7 ${(audit.issues || []).length} erreurs \u00b7 ${(audit.changing_files || []).length} sources modifi\u00e9es depuis \u00b7 ${(audit.missing_thread_ids || []).length} conversations sans source. ${date(audit.checked_at)}.`
@@ -280,7 +304,7 @@ function render(data) {
   $("#watcher-diagnostic").textContent =
     `Dernier scan : ${date(watcher.last_scan_at)}. ${watcher.scanned || 0} fichiers examin\u00e9s, ${watcher.imported || 0} import\u00e9s, ${watcher.skipped || 0} inchang\u00e9s.`;
   const rows = (data.recent_conversations || []).slice(0, 8);
-  $("#history-count").textContent = `${rows.length} derni\u00e8res`;
+  $("#history-count").textContent = `${rows.length} ${rows.length === 1 ? "derni\u00e8re" : "derni\u00e8res"}`;
   const list = $("#conversations");
   list.replaceChildren();
   if (!rows.length) {
@@ -307,7 +331,22 @@ function render(data) {
     list.append(item);
   }
   const pendingIcloud = data.icloud_auth?.status === "needs_2fa";
-  const pendingIcloudWebApproval = data.icloud_auth?.status === "needs_web_approval";
+  if (data.oauth_auth?.status === "needs_selection" && !providerChosen) {
+    $("#provider").value = data.oauth_auth.provider;
+    switchingCloud = true;
+    $("#cloud-connect-form").hidden = false;
+    settings();
+  }
+  const choices = data.oauth_auth?.choices || [];
+  const savedChoice = $("#cloud-selection").value;
+  $("#cloud-selection").replaceChildren(...choices.map(item => {
+    const option = document.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    return option;
+  }));
+  if (choices.some(item => item.value === savedChoice)) $("#cloud-selection").value = savedChoice;
+  const pendingIcloudWebApproval = ["needs_web_approval", "needs_access_retry"].includes(data.icloud_auth?.status);
   const pendingIcloudTerms = data.icloud_auth?.status === "needs_terms_acceptance";
   if (data.icloud_auth?.status === "checking_access") {
     icloudAwaiting2FA = icloudAwaitingWebApproval = icloudAwaitingTerms = false;
@@ -330,13 +369,13 @@ function render(data) {
     notice("iCloud connect\u00e9. La sauvegarde poss\u00e8de son propre suivi ci-dessus.");
     $("#cloud-connect-form").hidden = true;
   }
-  if (pendingIcloudTerms && !icloudAwaitingTerms) {
+  if (!providerChosen && pendingIcloudTerms && !icloudAwaitingTerms) {
     $("#provider").value = "icloud-online";
     revealIcloudTerms();
-  } else if (pendingIcloudWebApproval && !icloudAwaitingWebApproval) {
+  } else if (!providerChosen && pendingIcloudWebApproval && !icloudAwaitingWebApproval) {
     $("#provider").value = "icloud-online";
     revealIcloudWebApproval();
-  } else if (pendingIcloud && !icloudAwaiting2FA) {
+  } else if (!providerChosen && pendingIcloud && !icloudAwaiting2FA) {
     $("#provider").value = "icloud-online";
     revealIcloud2FA();
   } else if (data.job?.error && data.sync_active && !sync.error) {
@@ -367,12 +406,13 @@ async function refresh() {
   }
 }
 async function action(name, body = {}) {
-  if (requestBusy || current?.job?.running) return;
+  if (requestBusy || (current?.job?.running && !["open-folder", "pause-sync", "menubar-login"].includes(name))) return;
   requestBusy = true;
   busy();
   notice("Op\u00e9ration en cours\u2026");
   try {
     if (name === "connect-cloud") {
+      providerChosen = false;
       const file = $("#oauth-client").files[0];
       body = {
         provider: $("#provider").value,
@@ -390,6 +430,9 @@ async function action(name, body = {}) {
         icloud_resume: icloudAwaitingWebApproval,
         icloud_restart_after_terms: icloudAwaitingTerms,
         onedrive_type: $("#onedrive-type").value,
+        reauthenticate: reauthenticating,
+        cloud_selection: $("#provider").value === current?.oauth_auth?.provider &&
+          current?.oauth_auth?.status === "needs_selection" ? $("#cloud-selection").value : null,
       };
     }
     if (name === "cloud-folder") body = {folder: $("#cloud-folder").value};
@@ -436,6 +479,8 @@ $("#menubar-login").addEventListener("change", async (event) => {
   event.target.disabled = false;
 });
 $("#cloud-switch").addEventListener("click", () => {
+  reauthenticating = false;
+  providerChosen = true;
   switchingCloud = true;
   icloudAwaiting2FA = false;
   icloudAwaitingWebApproval = false;
@@ -445,6 +490,11 @@ $("#cloud-switch").addEventListener("click", () => {
     $("#provider").value = provider;
   render(current);
   $("#provider").focus();
+});
+$("#cloud-reconnect").addEventListener("click", () => {
+  $("#cloud-switch").click();
+  reauthenticating = true;
+  updateProviderFields();
 });
 function updateProviderFields() {
   const value = $("#provider").value;
@@ -462,12 +512,15 @@ function updateProviderFields() {
     (checking || icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms);
   $("#icloud-2fa-label").hidden = !icloudOnline || !icloudAwaiting2FA;
   $("#icloud-web-approval").hidden =
-    !icloudOnline || !icloudAwaitingWebApproval;
+    !icloudOnline || !icloudAwaitingWebApproval || current?.icloud_auth?.status === "needs_access_retry";
+  $("#icloud-access-retry").hidden = !icloudOnline || current?.icloud_auth?.status !== "needs_access_retry";
+  $("#icloud-access-retry").textContent = current?.icloud_auth?.message || "";
   $("#icloud-terms").hidden = !icloudOnline || !icloudAwaitingTerms;
   $("#icloud-flow-help").hidden =
-    icloudOnline &&
-    (icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms);
+    true;
+  $("#provider-note").hidden = icloudOnline && (icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms);
   $("#onedrive-fields").hidden = !onedriveOnline;
+  $("#cloud-selection-label").hidden = !onedriveOnline || current?.oauth_auth?.status !== "needs_selection";
   const label = providerNames[value] || "la destination";
   $('[data-action="connect-cloud"]').textContent =
     icloudOnline && icloudAwaitingTerms
@@ -478,7 +531,7 @@ function updateProviderFields() {
       ? "R\u00e9essayer iCloud"
       : icloudOnline && icloudAwaiting2FA
         ? "Confirmer le code iCloud"
-        : `Connecter ${label}`;
+        : `${reauthenticating ? "Reconnecter" : "Connecter"} ${label}`;
   $("#provider-note").textContent =
     icloudOnline && icloudAwaitingTerms
       ? icloudTermsMessage
@@ -489,6 +542,8 @@ function updateProviderFields() {
         : providerNotes[value] || providerNotes["local-folder"];
 }
 $("#provider").addEventListener("change", () => {
+  providerChosen = true;
+  reauthenticating = false;
   icloudAwaiting2FA = false;
   icloudAwaitingWebApproval = false;
   icloudAwaitingTerms = false;

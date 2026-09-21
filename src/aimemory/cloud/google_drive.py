@@ -10,7 +10,9 @@ import time
 import uuid
 from pathlib import Path
 
-from aimemory.state import write_json
+from aimemory.state import write_json, read_json, atomic_write
+from aimemory.cloud.destination import remote_path
+import io
 
 
 def rclone_binary() -> str:
@@ -63,6 +65,10 @@ class GoogleDriveProvider:
         self.config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.config.parent.chmod(0o700)
         pending = self.config.with_suffix(".pending")
+        previous = read_json(self.paths.state / "cloud.json")
+        root = previous.get("root", "AI-Memory") if previous.get("provider") == self.name else "AI-Memory"
+        if self.config.exists():
+            shutil.copy2(self.config, pending)
         try:
             client_args = []
             if oauth_client:
@@ -70,6 +76,15 @@ class GoogleDriveProvider:
                 if not client.get("client_id") or not client.get("client_secret"):
                     raise ValueError("Choose a Google OAuth JSON file for a Desktop application.")
                 client_args = ["client_id", client["client_id"], "client_secret", client["client_secret"]]
+            else:
+                previous_config = configparser.ConfigParser(interpolation=None)
+                previous_config.read(pending)
+                if previous_config.has_option("aimemory", "client_id"):
+                    client_args = ["client_id", previous_config.get("aimemory", "client_id"),
+                                   "client_secret", previous_config.get("aimemory", "client_secret", fallback="")]
+            if pending.exists():
+                # Reauthorize only this remote; other provider sessions stay intact.
+                self.run(["config", "delete", "aimemory"], timeout=30, config=pending)
             # drive.file limits access to files created through this OAuth application.
             self.run(["config", "create", "aimemory", "drive", "scope", "drive.file",
                       "config_is_local", "true", "config_change_team_drive", "false", *client_args, "--no-output"],
@@ -82,13 +97,13 @@ class GoogleDriveProvider:
             if not token.get("access_token"):
                 raise RuntimeError("Google authorization is incomplete.")
             pending.chmod(0o600)
-            self.run(["mkdir", self.remote], config=pending)
+            self.run(["mkdir", remote_path({"provider": self.name, "root": root})], config=pending)
             os.replace(pending, self.config)
             write_json(
                 self.paths.state / "cloud.json",
                 {
                     "provider": self.name,
-                    "root": "AI-Memory",
+                    "root": root,
                     "oauth_client": "custom" if client_args else "shared",
                     "connection_id": uuid.uuid4().hex,
                 },
@@ -135,7 +150,16 @@ class GoogleDriveProvider:
                     process.communicate()
 
     def disconnect(self) -> None:
-        self.config.unlink(missing_ok=True)
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read(self.config)
+        parser.remove_section("aimemory")
+        if parser.sections():
+            stream = io.StringIO()
+            parser.write(stream)
+            atomic_write(self.config, stream.getvalue().encode())
+            self.config.chmod(0o600)
+        else:
+            self.config.unlink(missing_ok=True)
         (self.paths.state / "cloud.json").unlink(missing_ok=True)
 
 

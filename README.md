@@ -68,9 +68,13 @@ Après la connexion, ouvrez **Réglages > Dossier de sauvegarde** pour voir le c
 
 La première sauvegarde peut être longue. L'interface affiche la progression, la dernière activité, les erreurs éventuelles et l'espace local récupéré. Les transferts interrompus reprennent en ignorant les objets déjà confirmés dans le cloud.
 
+**Synchroniser signifie envoyer ET recevoir.** « Envoi » sauvegarde les données de ce Mac ; « Réception » récupère celles de la destination, notamment de l'autre ordinateur. Le compteur indique des objets (versions et originaux), pas un nombre de conversations. Le bouton pause suspend les transferts ; la flèche de synchronisation permet de reprendre.
+
 #### Changer de compte, de drive ou de dossier
 
-Utilisez **Changer de destination**. AI Memory récupère d'abord les conversations disponibles uniquement dans l'ancienne destination, puis copie l'ensemble courant vers la nouvelle. L'ancien dossier distant n'est pas supprimé.
+Utilisez **Changer de destination**. AI Memory récupère d'abord tous les originaux et toutes les versions de l'ancienne destination, y compris ceux déjà nettoyés du Mac, puis les copie vers la nouvelle. La migration reste enregistrée jusqu'à sa fin. L'ancien dossier distant n'est pas supprimé. Prévoyez assez de place locale pour cette étape ; si l'ancien Drive est inaccessible, le changement est bloqué sans annoncer une migration réussie.
+
+Pour renouveler une autorisation expirée **sans changer de compte**, utilisez **Reconnecter ce compte** : cette action ne dépend pas d'un téléchargement préalable depuis la session expirée et conserve le dossier choisi. Pour utiliser un autre compte, passez par **Changer de destination**. OneDrive peut demander de choisir le Drive après l'autorisation Microsoft.
 
 Si un drive est plein, libérez de l'espace ou changez de destination. AI Memory conserve les données qui ne sont pas encore confirmées dans le cloud.
 
@@ -97,16 +101,18 @@ Le bouton installe automatiquement AI Memory dans tous les clients détectés su
 | --- | --- |
 | Codex | `~/.codex/config.toml` |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` sur macOS |
+| Claude Code, terminal et extension VS Code | `~/.claude.json`, configuration utilisateur |
 | VS Code | fichier utilisateur `mcp.json` |
 
-Les trois configurations pointent vers la copie autonome `~/.ai-memory/bin/ai-memory-cli`, jamais vers l'emplacement de l'application. Vous pouvez donc déplacer AI Memory après l'activation. Sous Windows, cette copie est placée dans `%LOCALAPPDATA%\AI Memory\bin`.
+Ces configurations pointent vers la copie autonome `~/.ai-memory/bin/ai-memory-cli`, jamais vers l'emplacement de l'application. Vous pouvez donc déplacer AI Memory après l'activation. Sous Windows, cette copie est placée dans `%LOCALAPPDATA%\AI Memory\bin`. Les clients absents sont ignorés ; avoir uniquement Claude ou uniquement Codex est suffisant. `CODEX_HOME` et `CLAUDE_CONFIG_DIR` sont respectés lorsqu'ils sont définis dans l'environnement de l'application.
 
-L'installation dans un client n'installe pas automatiquement le MCP dans les autres : le bouton AI Memory configure en une fois tous ceux qui sont présents. Si vous installez plus tard un nouveau client, cliquez de nouveau sur **Activer**. Après une mise à jour depuis une version antérieure à `0.4.18`, cliquez également une fois sur **Activer** pour migrer l'ancienne configuration et le composant de sauvegarde cloud.
+L'installation dans un client n'installe pas automatiquement le MCP dans les autres : le bouton AI Memory configure en une fois tous ceux qui sont présents. Si vous installez plus tard un nouveau client, cliquez sur **Réparer** (ou **Activer** si le MCP n'est pas encore configuré). Après une mise à jour depuis une version antérieure à `0.4.18`, utilisez également ce bouton pour migrer l'ancienne configuration et le composant de sauvegarde cloud.
 
 #### Vérifier que le MCP est connecté
 
 - **Codex** : tapez `/mcp` et vérifiez que `ai-memory` est connecté.
 - **Claude Desktop** : ouvrez la liste des outils ou connecteurs et vérifiez que les outils AI Memory apparaissent.
+- **Claude Code** : utilisez `/mcp`. La configuration utilisateur est partagée avec son extension VS Code ; le MCP natif de VS Code est une configuration distincte. [Documentation Claude Code](https://code.claude.com/docs/en/mcp).
 - **VS Code** : ouvrez la palette avec `Cmd + Shift + P` ou `Ctrl + Shift + P`, lancez **MCP: List Servers**, puis vérifiez `ai-memory`.
 
 #### Utiliser le MCP
@@ -128,11 +134,14 @@ Vérifie avec AI Memory quand la dernière synchronisation cloud a réussi.
 Le MCP expose les outils suivants :
 
 - `search_conversations` : recherche plein texte ;
-- `get_conversation` : lecture d'une conversation précise ;
+- `get_conversation` : lecture paginée d'une conversation (`offset`, `limit`, `next_offset`) ;
 - `list_conversations` : liste filtrée par source ou projet ;
 - `get_project_history` : historique d'un projet ;
+- `list_projects` : noms, chemins et identifiants pour distinguer les projets homonymes ;
 - `get_sync_status` : état du watcher et du cloud ;
-- `sync_now` : synchronisation immédiate.
+- `sync_now` : demande de synchronisation au watcher, sans bloquer le client pendant le transfert. Le watcher doit être actif.
+
+La recherche accepte des dates ISO, un nom ou identifiant de projet, et les familles `codex`, `claude` ou `vscode`, incluant leurs variantes. Deux dossiers de même nom ne sont pas fusionnés uniquement à cause de leur nom. Les projets créés indépendamment sur plusieurs machines peuvent garder des identifiants distincts.
 
 ### Utiliser plusieurs ordinateurs
 
@@ -147,11 +156,16 @@ Chaque machine reconstruit son propre index de recherche à partir des archives 
 
 AI Memory affiche séparément :
 
-- **Conversations et versions** : archives normalisées courantes et anciennes versions encore conservées localement ;
+- **Conversations et archives** : total des conversations consultables, sources originales et versions archivées ; le détail est affiché séparément ;
+- **Cache et transferts en attente** : fichiers temporaires, y compris les réceptions interrompues ;
 - **Index de recherche** : base SQLite utilisée pour les recherches rapides et hors ligne ;
 - **Total sur cet ordinateur** : ensemble des fichiers AI Memory locaux, y compris fichiers temporaires et état de synchronisation.
 
 Après une sauvegarde cloud vérifiée, AI Memory supprime automatiquement du Mac les originaux compressés et les anciennes révisions lourdes qui sont confirmés dans le cloud. Les conversations courantes et l'index restent disponibles localement afin que le MCP soit rapide et fonctionne hors ligne.
+
+Pour **iCloud/OneDrive/Dropbox du Mac**, une copie locale ne prouve pas l'envoi aux serveurs du fournisseur : le statut l'indique et AI Memory conserve ses originaux. Les ajouts aux sources utilisent des deltas, avec une base complète au maximum toutes les 32 dépendances. L'index peut être compacté automatiquement hors import/transfert si l'espace disponible le permet. Le nettoyage des anciens ZIP vise le cache AI Memory, pas les téléchargements personnels du navigateur.
+
+Il n'y a pas encore de limite automatique de taille de l'historique cloud : les versions réellement distinctes sont conservées. Une migration peut donc demander de l'espace ; AI Memory s'arrête avec une erreur explicite si la réserve disque est insuffisante plutôt que supprimer une copie non confirmée.
 
 Les transferts sont adressés par le hash du contenu : relancer une synchronisation ne crée pas une seconde copie du même objet. AI Memory fusionne également les snapshots dont le contenu conversationnel est identique, même si Codex ou Claude les a signalés sous un autre client, puis retire ces variantes redondantes du cloud.
 
@@ -167,13 +181,20 @@ Les transferts sont adressés par le hash du contenu : relancer une synchronisat
 
 | Problème | Solution |
 | --- | --- |
-| Le MCP n'apparaît pas | Cliquez de nouveau sur **Activer**, puis quittez complètement et relancez le client. |
+| Le MCP n'apparaît pas | Cliquez sur **Réparer** (ou **Activer** lors de la première configuration), puis quittez complètement et relancez le client. |
+| La collecte est en erreur | Utilisez **Réparer** après la fin de l'import/transfert, ou suspendez les transferts avant la réparation. |
 | Les anciennes conversations manquent | Laissez finir le premier import et vérifiez l'état du watcher dans l'icône de menu. |
 | Le cloud est plein | Libérez de l'espace ou utilisez **Changer de destination**. |
 | iCloud affiche `Resource deadlock avoided` | Ouvrez le dossier dans Finder, forcez son téléchargement et laissez le watcher réessayer. |
 | La connexion Google cesse de fonctionner | Configurez votre propre client OAuth Desktop selon la [documentation rclone](https://rclone.org/drive/#making-your-own-client-id). |
 
 ## Guide développeur
+
+### Validation 0.4.21
+
+Les corrections présentes sur `main` ne sont pas une preuve de publication dans GitHub Releases. L'audit initial et le suivi des corrections sont dans [le rapport d'audit](docs/audit-2026-09-21.md). Les connexions cloud des tests utilisent des doublures et des dossiers temporaires, pas des comptes réels.
+
+Le build macOS doit transmettre `--codesign-identity` **aux deux appels PyInstaller**, avant l'empaquetage des bibliothèques. Une signature extérieure seule ne suffit pas pour le CLI `--onefile`. Avant publication, lancer `python scripts/smoke_packaged.py "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"` : démarrage du binaire signé, scan isolé, négociation MCP et recherche. Aucun changement de l'installation utilisateur n'est effectué par ce test.
 
 ### Architecture
 
@@ -357,9 +378,13 @@ After connecting, open **Réglages > Dossier de sauvegarde** to see the exact pa
 
 The first backup may take a while. The UI shows progress, recent activity, errors, and reclaimed local space. Interrupted transfers resume by skipping objects already confirmed in the cloud.
 
+**Synchronization sends AND receives.** Upload saves this computer's data; download retrieves data from the destination, including another computer's archives. Counters show objects (revisions and originals), not conversations. Pause suspends transfers; the synchronization arrow resumes them.
+
 #### Change account, drive, or folder
 
-Use **Changer de destination**. AI Memory first retrieves conversations that exist only in the previous destination, then copies the current set to the new destination. It does not delete the previous remote folder.
+Use **Changer de destination**. AI Memory retrieves every original and revision from the previous destination, including objects already pruned from this Mac, then copies them to the new destination. Migration state persists until completion. The previous remote folder is not deleted. Allow enough local disk space for staging; an inaccessible source blocks migration instead of reporting success.
+
+To renew expired authorization **without changing accounts**, use **Reconnecter ce compte**. This does not require downloading from the expired session first and preserves the selected folder. To use a different account, use **Changer de destination**. OneDrive may ask you to select a drive after Microsoft authorization.
 
 If a drive is full, free some space or change destination. AI Memory retains data that has not yet been confirmed in the cloud.
 
@@ -386,16 +411,18 @@ The button configures every supported client detected on that computer:
 | --- | --- |
 | Codex | `~/.codex/config.toml` |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS |
+| Claude Code, terminal and VS Code extension | user-scoped `~/.claude.json` |
 | VS Code | user-level `mcp.json` |
 
-All three configurations point to the standalone copy at `~/.ai-memory/bin/ai-memory-cli`, never to the application location. You can therefore move AI Memory after enabling it. On Windows, the copy is installed under `%LOCALAPPDATA%\AI Memory\bin`.
+These configurations point to the standalone copy at `~/.ai-memory/bin/ai-memory-cli`, never to the application location. You can therefore move AI Memory after enabling it. On Windows, the copy is installed under `%LOCALAPPDATA%\AI Memory\bin`. Missing clients are skipped; using only Claude or only Codex is supported. `CODEX_HOME` and `CLAUDE_CONFIG_DIR` are respected when present in the application's environment.
 
-Installing MCP in one client does not install it in the others by itself. The AI Memory button handles all clients currently installed. If you install another client later, click **Activer** again. After upgrading from a version older than `0.4.18`, also click **Activer** once to migrate the previous configuration and cloud backup component.
+Installing MCP in one client does not install it in the others by itself. The AI Memory button handles all clients currently installed. If you install another client later, click **Réparer** (Repair), or **Activer** (Enable) if MCP has not been configured yet. After upgrading from a version older than `0.4.18`, use this button as well to migrate the previous configuration and cloud backup component.
 
 #### Verify the MCP connection
 
 - **Codex**: enter `/mcp` and confirm that `ai-memory` is connected.
 - **Claude Desktop**: open the tools or connectors list and check for AI Memory tools.
+- **Claude Code**: use `/mcp`. Its user configuration is shared with its VS Code extension; VS Code's native MCP configuration is separate. [Claude Code documentation](https://code.claude.com/docs/en/mcp).
 - **VS Code**: open the command palette with `Cmd + Shift + P` or `Ctrl + Shift + P`, run **MCP: List Servers**, and check for `ai-memory`.
 
 #### Use MCP
@@ -417,11 +444,14 @@ Use AI Memory to check when the last cloud synchronization succeeded.
 The MCP server exposes:
 
 - `search_conversations`: full-text search;
-- `get_conversation`: retrieve one conversation;
+- `get_conversation`: paginated retrieval (`offset`, `limit`, `next_offset`);
 - `list_conversations`: list conversations by source or project;
 - `get_project_history`: retrieve project history;
+- `list_projects`: discover project names, paths and IDs to distinguish identical names;
 - `get_sync_status`: inspect watcher and cloud state;
-- `sync_now`: trigger synchronization immediately.
+- `sync_now`: queue a request for the watcher without blocking the client during transfers. The watcher must be running.
+
+Search supports ISO dates, a project name or ID, and the `codex`, `claude` and `vscode` source families including their variants. Unrelated folders are not merged solely because their names match. Projects created independently on different computers may retain distinct IDs.
 
 ### Use multiple computers
 
@@ -436,11 +466,16 @@ Each machine builds its own search index from downloaded archives. AI Memory doe
 
 AI Memory reports these values separately:
 
-- **Conversations and versions**: current normalized archives and older revisions still stored locally;
+- **Conversations and archives**: total of readable conversations, original sources and archived revisions, with separate detailed sizes;
+- **Cache and pending transfers**: temporary files, including interrupted downloads;
 - **Search index**: the SQLite database used for fast and offline search;
 - **Total on this computer**: all local AI Memory files, including temporary files and synchronization state.
 
 After a verified cloud backup, AI Memory automatically removes compressed originals and large historical revisions from the Mac when they are confirmed in the cloud. Current conversations and the search index remain local so MCP stays fast and works offline.
+
+For **iCloud/OneDrive/Dropbox on the Mac**, a local copy does not prove server upload: the UI states this and AI Memory retains its originals. Source appends use deltas, with a full base at most every 32 dependencies. SQLite can be compacted automatically outside imports/transfers when sufficient disk space is available. Old ZIP cleanup covers AI Memory's cache, not personal browser downloads.
+
+There is not yet an automatic cloud history size limit: genuinely distinct revisions are retained. Migration may require substantial local space; AI Memory stops with an explicit error if its free-space reserve is insufficient rather than deleting an unconfirmed copy.
 
 Transfers are content-addressed: restarting synchronization does not create another copy of the same object. AI Memory also merges snapshots with identical conversation content even when Codex or Claude reported them under another client, then removes those redundant variants from the cloud.
 
@@ -456,13 +491,20 @@ Transfers are content-addressed: restarting synchronization does not create anot
 
 | Problem | Solution |
 | --- | --- |
-| MCP does not appear | Click **Activer** again, then fully quit and restart the client. |
+| MCP does not appear | Click **Réparer** (Repair), or **Activer** (Enable) for the initial setup, then fully quit and restart the client. |
+| Collection reports an error | Use **Réparer** once imports/transfers finish, or pause transfers before repairing. |
 | Older conversations are missing | Let the first import complete and inspect the watcher state from the menu-bar icon. |
 | Cloud storage is full | Free space or use **Changer de destination**. |
 | iCloud reports `Resource deadlock avoided` | Open the folder in Finder, force its download, and let the watcher retry. |
 | Google authentication stops working | Configure your own Desktop OAuth client using the [rclone documentation](https://rclone.org/drive/#making-your-own-client-id). |
 
 ## Developer guide
+
+### 0.4.21 validation
+
+Fixes on `main` do not imply that a GitHub Release has been published. The initial audit and remediation record are in [the audit report](docs/audit-2026-09-21.md). Cloud tests use doubles and temporary directories, not real accounts.
+
+macOS builds must pass `--codesign-identity` **to both PyInstaller invocations**, before embedding libraries. Signing only the outside of a `--onefile` executable is insufficient. Before publication, run `python scripts/smoke_packaged.py "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"` to exercise the signed executable, an isolated watcher scan, MCP initialization and search. This test does not modify the user's installation.
 
 ### Architecture
 

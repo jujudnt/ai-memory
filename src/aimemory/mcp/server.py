@@ -28,6 +28,7 @@ def build_server():
     server.tool()(handlers.get_conversation)
     server.tool()(handlers.list_conversations)
     server.tool()(handlers.get_project_history)
+    server.tool()(handlers.list_projects)
     server.tool()(handlers.get_sync_status)
     server.tool()(handlers.sync_now)
     return server

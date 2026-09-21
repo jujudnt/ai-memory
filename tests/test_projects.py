@@ -13,3 +13,7 @@ def test_identify_project_prefers_git_remote():
     assert project.name == "project"
     assert project.git_remote == "github.com/user/project"
     assert project.git_branch == "main"
+
+
+def test_unrelated_folders_with_same_name_are_not_merged():
+    assert identify_project("/clients/a/website").id != identify_project("/clients/b/website").id

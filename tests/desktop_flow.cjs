@@ -43,5 +43,22 @@ assert.match(el('cloud-detail').textContent, /Dossier indisponible/);
 w.render({...base, storage:{...base.storage, provider:'icloud-online'}, sync_active:true,
   sync:{status:'uploading', error:null}, job:{error:true, message:'Ancienne erreur iCloud'}});
 assert.equal(el('message').hidden, true);
+w.render({...base, watcher:{running:true, last_error:'Too many open files'}, watcher_service:{installed:true},
+  health:{state:'error', label:'Collecte en erreur'}});
+assert.equal(el('watcher-enable').hidden, false);
+assert.equal(el('watcher-enable').textContent, 'Réparer');
+w.render({...base, sync_active:true, job:{running:true}});
+assert.equal(w.document.querySelector('[data-action="open-folder"]').disabled, false);
+assert.equal(el('sync-pause').disabled, false);
+assert.equal(el('watcher-enable').disabled, true);
+assert.equal(el('menubar-login').disabled, false);
+el('provider').value = 'dropbox-online';
+el('provider').dispatchEvent(new w.Event('change'));
+w.render({...base, icloud_auth:{status:'needs_2fa'}});
+assert.equal(el('provider').value, 'dropbox-online');
+w.render({...base, sync_paused:true, sync:{status:'paused'}});
+assert.match(el('cloud-detail').textContent, /suspendus/);
+w.render({...base, sync:{status:'synced', confirmation:'local_folder'}});
+assert.match(el('cloud-detail').textContent, /Copie locale/);
 dom.window.close();
 console.log('Desktop auth transitions and folder editing passed');

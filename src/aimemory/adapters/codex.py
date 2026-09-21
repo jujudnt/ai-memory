@@ -19,7 +19,7 @@ from aimemory.projects import identify_project
 
 class CodexAdapter:
     source = "codex"
-    parser_version = 4
+    parser_version = 5
 
     def __init__(self, codex_home: Path | None = None, device_id: str | None = None):
         self.codex_home = codex_home or default_codex_home()

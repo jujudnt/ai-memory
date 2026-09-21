@@ -14,6 +14,8 @@ from pathlib import Path
 from aimemory.cloud.google_drive import rclone_binary
 from aimemory.cloud.providers import provider_label
 from aimemory.state import now, read_json, write_json
+from aimemory.cloud.destination import remote_path
+from aimemory.cloud.errors import CloudError, error_category
 
 
 ICLOUD_WEB_APPROVAL_MESSAGE = (
@@ -61,6 +63,13 @@ class RcloneCloudProvider:
         self.spec = spec
         self.config = paths.home / "credentials" / "rclone.conf"
 
+    def target_root(self) -> str:
+        current = read_json(self.paths.state / "cloud.json")
+        return current.get("root", "AI-Memory") if current.get("provider") == self.spec.provider else "AI-Memory"
+
+    def target_remote(self) -> str:
+        return remote_path({"provider": self.spec.provider, "root": self.target_root()})
+
     @classmethod
     def for_provider(cls, paths, provider: str) -> "RcloneCloudProvider":
         if provider not in RCLONE_PROVIDER_SPECS:
@@ -91,14 +100,14 @@ class RcloneCloudProvider:
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"{provider_label(self.spec.provider)} n'a pas répondu. Réessayez.") from None
+            raise CloudError(f"{provider_label(self.spec.provider)} n'a pas répondu. Réessayez.") from None
         if result.returncode:
             if self.spec.provider == "icloud-online":
                 if _icloud_terms_error(result.stderr):
                     raise ICloudTermsAcceptanceRequired(ICLOUD_TERMS_MESSAGE)
                 if _icloud_web_approval_error(result.stderr):
                     raise ICloudWebApprovalRequired(ICLOUD_WEB_APPROVAL_MESSAGE)
-            raise RuntimeError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode))
+            raise CloudError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode), error_category(result.stderr))
         return result.stdout
 
     def connect(self, options: dict | None = None) -> dict | None:
@@ -115,21 +124,51 @@ class RcloneCloudProvider:
 
         self.config.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.config.parent.chmod(0o700)
-        pending = self.config.with_suffix(".pending")
-        if self.config.exists():
+        pending = self.config.with_suffix(f".{self.spec.provider}.pending")
+        auth_path = self.paths.state / f"oauth-{self.spec.provider}.json"
+        continuing = options.get("selection") is not None
+        if not continuing and self.config.exists():
             shutil.copy2(self.config, pending)
         try:
-            try:
-                self.run(["config", "delete", self.spec.remote_name], timeout=30, config=pending)
-            except RuntimeError:
-                pass
-            args = ["config", "create", self.spec.remote_name, self.spec.backend]
-            if self.spec.provider in {"dropbox-online", "onedrive-online"}:
-                args.extend(["config_is_local", "true"])
-            if self.spec.provider == "onedrive-online":
-                args.extend(["region", "global", "drive_type", options.get("onedrive_type") or "personal"])
-            args.append("--no-output")
-            self.run(args, timeout=300, config=pending)
+            if continuing:
+                auth = read_json(auth_path)
+                selection = str(options["selection"])
+                if not pending.exists() or selection not in [item["value"] for item in auth.get("choices", [])]:
+                    raise ValueError("Sélection de Drive invalide ou session expirée.")
+                args = ["config", "update", self.spec.remote_name, "--continue", "--state", auth["state"],
+                        "--result", selection, "--non-interactive"]
+            else:
+                auth_path.unlink(missing_ok=True)
+                try:
+                    self.run(["config", "delete", self.spec.remote_name], timeout=30, config=pending)
+                except RuntimeError:
+                    pass
+                args = ["config", "create", self.spec.remote_name, self.spec.backend, "config_is_local", "true"]
+                if self.spec.provider == "onedrive-online":
+                    args.extend(["region", "global", "drive_type", options.get("onedrive_type") or "personal",
+                                 "config_type", "onedrive"])
+                args.append("--non-interactive")
+            result = _config_result(self.run(args, timeout=300, config=pending))
+            # rclone may ask for a drive when one Microsoft account exposes several.
+            for _ in range(4):
+                if not result.get("State"):
+                    break
+                option = result.get("Option") or {}
+                if option.get("Name") == "config_driveok":
+                    result = _config_result(self.run(["config", "update", self.spec.remote_name, "--continue",
+                        "--state", result["State"], "--result", "true", "--non-interactive"], config=pending))
+                    continue
+                choices = [{"value": str(item["Value"]), "label": str(item.get("Help") or item["Value"])}
+                           for item in option.get("Examples", []) if "Value" in item]
+                if not choices:
+                    raise RuntimeError("Le fournisseur demande une étape non prise en charge. Aucun compte n'a été remplacé.")
+                auth = {"status": "needs_selection", "provider": self.spec.provider, "state": result["State"],
+                        "choices": choices, "message": "Choisissez le Drive de sauvegarde."}
+                pending.chmod(0o600)
+                write_json(auth_path, auth)
+                return auth
+            if result.get("State"):
+                raise RuntimeError("La configuration du Drive n'est pas terminée.")
             parser = configparser.ConfigParser(interpolation=None)
             parser.read(pending)
             if not parser.has_section(self.spec.remote_name):
@@ -137,21 +176,23 @@ class RcloneCloudProvider:
             if self.spec.provider != "icloud-online" and not parser.has_option(self.spec.remote_name, "token"):
                 raise RuntimeError(f"{provider_label(self.spec.provider)} n'a pas renvoyé de jeton d'accès.")
             pending.chmod(0o600)
-            self.run(["mkdir", self.spec.remote], config=pending)
+            self.run(["mkdir", self.target_remote()], config=pending)
             os.replace(pending, self.config)
             write_json(
                 self.paths.state / "cloud.json",
                 {
                     "provider": self.spec.provider,
-                    "root": "AI-Memory",
+                    "root": self.target_root(),
                     "remote": self.spec.remote_name,
                     "mode": "online",
                     "connection_id": uuid.uuid4().hex,
                 },
             )
             write_json(self.paths.state / "sync-status.json", {"status": "connected"})
+            auth_path.unlink(missing_ok=True)
         finally:
-            pending.unlink(missing_ok=True)
+            if not auth_path.exists():
+                pending.unlink(missing_ok=True)
 
     @property
     def icloud_pending_config(self) -> Path:
@@ -354,24 +395,29 @@ class RcloneCloudProvider:
         })
         pending.chmod(0o600)
         try:
-            self.run(["mkdir", self.spec.remote], config=pending)
+            self.run(["mkdir", self.target_remote()], config=pending)
         except ICloudTermsAcceptanceRequired:
             return self._set_icloud_terms_acceptance(read_json(self.icloud_auth_state_path))
         except ICloudWebApprovalRequired:
             return self._set_icloud_web_approval(read_json(self.icloud_auth_state_path))
-        except Exception:
-            write_json(self.icloud_auth_state_path, {
-                "status": "access_failed",
-                "message": "L'accès à iCloud Drive n'a pas pu être vérifié. Recommencez la connexion.",
-            })
-            raise
+        except Exception as exc:
+            auth_error = getattr(exc, "category", None) == "auth"
+            state = {
+                "status": "access_failed" if auth_error else "needs_access_retry",
+                "message": "La session Apple a expiré. Reconnectez ce compte." if auth_error else
+                    "Session Apple validée, mais accès au Drive temporairement indisponible. Réessayez sans saisir un nouveau code.",
+            }
+            write_json(self.icloud_auth_state_path, state)
+            if auth_error:
+                raise
+            return state
         os.replace(pending, self.config)
         self.icloud_auth_state_path.unlink(missing_ok=True)
         write_json(
             self.paths.state / "cloud.json",
             {
                 "provider": self.spec.provider,
-                "root": "AI-Memory",
+                "root": self.target_root(),
                 "remote": self.spec.remote_name,
                 "mode": "online",
                 "connection_id": uuid.uuid4().hex,
@@ -458,7 +504,7 @@ def _config_result(output: str) -> dict:
     if not isinstance(result, dict):
         raise RuntimeError("Réponse d'authentification iCloud invalide.")
     if result.get("Error"):
-        raise RuntimeError(str(result["Error"]))
+        raise RuntimeError("Le fournisseur a refusé cette étape. Vérifiez la saisie ou recommencez la connexion.")
     return result
 
 
@@ -498,7 +544,7 @@ def _friendly_rclone_error(provider: str, output: str | bytes | None, code: int)
         return f"Connexion {name} refusée ou expirée. Reconnectez ce compte."
     if provider == "icloud-online":
         return (
-            "Connexion iCloud Drive en ligne incomplète. Validez la demande sur votre appareil Apple, saisissez le "
-            "code 2FA reçu dans AI Memory, puis reconnectez. Sinon utilisez iCloud Drive du Mac."
+            "iCloud Drive est temporairement indisponible. Vérifiez le réseau ; "
+            "les transferts validés sont conservés et une nouvelle tentative est prévue."
         )
     return f"{name} a échoué (code {code}). Vérifiez la connexion puis relancez."

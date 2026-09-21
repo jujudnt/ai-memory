@@ -11,6 +11,7 @@ import json
 import filecmp
 from dataclasses import dataclass
 from pathlib import Path
+from aimemory.state import atomic_write
 
 
 MCP_SERVER_NAME = "ai-memory"
@@ -58,7 +59,7 @@ def install_mcp_config(
     config_path: Path | None = None,
     ai_memory_home: Path | None = None,
 ) -> InstallResult:
-    config_path = config_path or Path("~/.codex/config.toml").expanduser()
+    config_path = config_path or Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser() / "config.toml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     block = mcp_toml_block(server_name, ai_memory_home)
@@ -72,7 +73,7 @@ def install_mcp_config(
         updated = prefix + block
     if updated == existing:
         return InstallResult(False, "MCP config already up to date.", str(config_path))
-    config_path.write_text(updated, encoding="utf-8")
+    atomic_write(config_path, updated.encode("utf-8"))
     return InstallResult(True, "MCP config installed.", str(config_path))
 
 
@@ -81,15 +82,20 @@ def install_all_mcp_configs(
     ai_memory_home: Path | None = None,
 ) -> InstallResult:
     runtime_changed = _install_cli_runtime()
-    results = [("Codex", install_mcp_config(server_name, ai_memory_home=ai_memory_home))]
+    results = []
+    if codex_available():
+        results.append(("Codex", install_mcp_config(server_name, ai_memory_home=ai_memory_home)))
     if claude_desktop_available():
         results.append(("Claude Desktop", install_claude_desktop_mcp_config(server_name, ai_memory_home=ai_memory_home)))
+    if claude_code_available():
+        results.append(("Claude Code (terminal et VS Code)", install_claude_desktop_mcp_config(
+            server_name, claude_code_config_path(), ai_memory_home)))
     vscode_path = vscode_user_mcp_config_path()
     if vscode_path:
         results.append(("VS Code", install_vscode_mcp_config(server_name, vscode_path, ai_memory_home)))
     changed = runtime_changed or any(result.changed for _, result in results)
     clients = ", ".join(name for name, _ in results)
-    message = (
+    message = "Aucun client compatible détecté." if not results else (
         f"MCP config installed for {clients}."
         if changed
         else f"MCP config already up to date for {clients}."
@@ -115,7 +121,7 @@ def install_claude_desktop_mcp_config(
     config["mcpServers"] = servers
     if existing == desired and config_path.exists():
         return InstallResult(False, "Claude Desktop MCP config already up to date.", str(config_path))
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write(config_path, (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return InstallResult(True, "Claude Desktop MCP config installed.", str(config_path))
 
 
@@ -138,7 +144,7 @@ def install_vscode_mcp_config(
     config["servers"] = servers
     if existing == desired and config_path.exists():
         return InstallResult(False, "VS Code MCP config already up to date.", str(config_path))
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write(config_path, (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     return InstallResult(True, "VS Code MCP config installed.", str(config_path))
 
 
@@ -160,6 +166,22 @@ def claude_desktop_config_path() -> Path:
         if appdata:
             return Path(appdata) / "Claude" / "claude_desktop_config.json"
     return Path("~/.config/Claude/claude_desktop_config.json").expanduser()
+
+
+def codex_available() -> bool:
+    return bool(shutil.which("codex") or Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().exists()
+                or Path("/Applications/Codex.app").exists())
+
+
+def claude_code_config_path() -> Path:
+    directory = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(directory).expanduser() / ".claude.json" if directory else Path.home() / ".claude.json"
+
+
+def claude_code_available() -> bool:
+    return bool(shutil.which("claude") or claude_code_config_path().exists()
+                or Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser().exists()
+                or any((Path.home() / ".vscode" / "extensions").glob("anthropic.claude-code-*")))
 
 
 def vscode_user_mcp_config_path() -> Path | None:
@@ -237,17 +259,17 @@ def _read_json_object(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Configuration Claude Desktop illisible: {path}") from exc
+        raise ValueError(f"Configuration MCP illisible (fichier conservé): {path}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Configuration Claude Desktop invalide: {path}")
     return data
 
 
-def install_watcher_service(interval_seconds: float = 10.0) -> InstallResult:
+def install_watcher_service(interval_seconds: float = 10.0, force: bool = False) -> InstallResult:
     runtime_changed = _install_cli_runtime()
     status = get_watcher_service_status()
     expected_command = [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)]
-    if not runtime_changed and status.installed and status.running and (
+    if not force and not runtime_changed and status.installed and status.running and (
         status.command is None or status.command == expected_command
     ):
         return InstallResult(False, "Watcher is already installed and running.", status.path)
@@ -349,6 +371,7 @@ def _install_windows_task(interval_seconds: float) -> InstallResult:
     )
     if result.returncode != 0:
         return InstallResult(False, result.stderr.strip() or result.stdout.strip())
+    subprocess.run(["schtasks", "/Run", "/TN", "AI Memory Watcher"], check=True, capture_output=True)
     return InstallResult(True, "Watcher scheduled task installed.", "AI Memory Watcher")
 
 
@@ -445,6 +468,7 @@ def _install_cli_runtime() -> bool:
     if not getattr(sys, "frozen", False):
         return False
     source = _bundled_cli_helper() or Path(sys.executable)
+    _validate_cli_runtime(source)
     destination = _installed_cli_helper()
     changed = _copy_runtime_file(source, destination)
 
@@ -459,6 +483,16 @@ def _install_cli_runtime() -> bool:
             changed = _copy_runtime_file(rclone_source, destination.with_name(rclone_name)) or changed
             break
     return changed
+
+
+def _validate_cli_runtime(executable: Path) -> None:
+    try:
+        result = subprocess.run([str(executable), "--help"], capture_output=True, timeout=30,
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Le composant AI Memory ne démarre pas. L'installation existante est conservée.") from exc
+    if result.returncode:
+        raise RuntimeError("Le composant AI Memory ne démarre pas. L'installation existante est conservée.")
 
 
 def _copy_runtime_file(source: Path, destination: Path) -> bool:

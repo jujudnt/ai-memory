@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,8 @@ class MemoryDatabase:
     def __init__(self, path: Path):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialized = False
+        self._schema_lock = threading.Lock()
 
     @contextmanager
     def connect(self):
@@ -29,6 +33,13 @@ class MemoryDatabase:
             conn.close()
 
     def initialize(self) -> None:
+        with self._schema_lock:
+            if self._initialized:
+                return
+            self._initialize_schema()
+            self._initialized = True
+
+    def _initialize_schema(self) -> None:
         with self.connect() as conn:
             conn.executescript(
                 """
@@ -72,6 +83,9 @@ class MemoryDatabase:
                     ordinal INTEGER NOT NULL,
                     FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_conversations_project
+                ON conversations(project_id);
 
                 CREATE INDEX IF NOT EXISTS idx_messages_conversation_role_ordinal
                 ON messages(conversation_id, role, ordinal DESC);
@@ -245,6 +259,9 @@ class MemoryDatabase:
         source: str | None = None,
         project_id: str | None = None,
         limit: int = 10,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         self.initialize()
         sql = """
@@ -265,14 +282,9 @@ class MemoryDatabase:
             WHERE conversations_fts MATCH ?
         """
         params: list[Any] = [_fts_query(query)]
-        if source:
-            sql += " AND c.source = ?"
-            params.append(source)
-        if project_id:
-            sql += " AND c.project_id = ?"
-            params.append(project_id)
-        sql += " ORDER BY score LIMIT ?"
-        params.append(limit)
+        clause, filters = _filters(source, project_id, date_from, date_to, "c.")
+        sql += clause + " ORDER BY score, c.id LIMIT ? OFFSET ?"
+        params.extend([*filters, max(1, min(limit, 1000)), max(0, offset)])
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
@@ -281,16 +293,15 @@ class MemoryDatabase:
         source: str | None = None,
         project_id: str | None = None,
         limit: int = 50,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         self.initialize()
         sql = "SELECT * FROM conversations WHERE 1=1"
         params: list[Any] = []
-        if source:
-            sql += " AND source = ?"
-            params.append(source)
-        if project_id:
-            sql += " AND project_id = ?"
-            params.append(project_id)
+        clause, params = _filters(source, project_id, date_from, date_to)
+        sql += clause
         sql = f"""
             SELECT c.*,
                 (
@@ -308,10 +319,10 @@ class MemoryDatabase:
                     LIMIT 1
                 ) AS latest_user_message_at
             FROM ({sql}) c
-            ORDER BY COALESCE(c.updated_at, c.created_at) DESC
-            LIMIT ?
+            ORDER BY COALESCE(c.updated_at, c.created_at) DESC, c.id
+            LIMIT ? OFFSET ?
         """
-        params.append(limit)
+        params.extend([max(1, limit), max(0, offset)])
         with self.connect() as conn:
             rows = []
             for row in conn.execute(sql, params).fetchall():
@@ -319,6 +330,19 @@ class MemoryDatabase:
                 item["latest_user_message"] = _conversation_preview(item.get("latest_user_message"))
                 rows.append(item)
             return rows
+
+    def list_projects(self) -> list[dict]:
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT p.*, COUNT(c.id) AS conversation_count FROM projects p "
+                "JOIN conversations c ON c.project_id = p.id GROUP BY p.id ORDER BY p.name, p.id"
+            )]
+
+    def archive_entries(self) -> list[dict]:
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute("SELECT id, archive_path FROM conversations")]
 
     def get_conversation_row(self, conversation_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -333,7 +357,7 @@ class MemoryDatabase:
         with self.connect() as conn:
             conversations = conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
             imports = conn.execute("SELECT COUNT(*) FROM imports").fetchone()[0]
-            projects = conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+            projects = conn.execute("SELECT COUNT(DISTINCT project_id) FROM conversations").fetchone()[0]
         return {
             "database": str(self.path),
             "conversation_count": conversations,
@@ -348,6 +372,31 @@ def file_hash(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _filters(source, project, date_from, date_to, prefix=""):
+    clauses, values = [], []
+    if source and source != "all":
+        sources = {
+            "claude": ("claude", "claude-code", "claude-desktop", "vscode-claude"),
+            "codex": ("codex", "vscode-codex"),
+            "vscode": ("vscode", "vscode-codex", "vscode-claude"),
+        }.get(source, (source,))
+        clauses.append(f"{prefix}source IN ({','.join('?' for _ in sources)})")
+        values.extend(sources)
+    if project:
+        clauses.append(f"{prefix}project_id IN (SELECT id FROM projects WHERE id = ? OR name = ? COLLATE NOCASE OR cwd = ? OR git_remote_normalized = ?)")
+        values.extend([project] * 4)
+    for value, operator, end in ((date_from, ">=", False), (date_to, "<=", True)):
+        if value:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if end and len(value) == 10:
+                parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            clauses.append(f"julianday(COALESCE({prefix}updated_at, {prefix}created_at)) {operator} julianday(?)")
+            values.append(parsed.isoformat())
+    return "".join(" AND " + clause for clause in clauses), values
 
 
 def _scoped_id(conversation_id: str, raw_id: str) -> str:
