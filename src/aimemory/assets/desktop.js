@@ -311,10 +311,11 @@ function render(data) {
   const pendingIcloudTerms = data.icloud_auth?.status === "needs_terms_acceptance";
   if (data.icloud_auth?.status === "checking_access") {
     icloudAwaiting2FA = icloudAwaitingWebApproval = icloudAwaitingTerms = false;
+    switchingCloud = false;
     notice(data.icloud_auth.message);
   }
   if (
-    (switchingCloud || icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms) &&
+    (icloudAwaiting2FA || icloudAwaitingWebApproval || icloudAwaitingTerms) &&
     !pendingIcloud &&
     !pendingIcloudWebApproval &&
     !pendingIcloudTerms &&
@@ -439,6 +440,9 @@ $("#cloud-switch").addEventListener("click", () => {
   icloudAwaiting2FA = false;
   icloudAwaitingWebApproval = false;
   icloudAwaitingTerms = false;
+  const provider = current?.storage?.provider;
+  if (provider && $("#provider").querySelector(`option[value="${provider}"]`))
+    $("#provider").value = provider;
   render(current);
   $("#provider").focus();
 });
