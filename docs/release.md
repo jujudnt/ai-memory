@@ -1,64 +1,72 @@
 # Release Builds
 
-AI Memory ships a first desktop app through GitHub Releases.
+GitHub Actions builds the macOS and Windows applications whenever a `v*` tag is pushed.
 
-The release artifact is intentionally simple:
+## Artifacts
 
-- double-click opens the desktop UI
-- macOS packages `AI Memory.app` with an internal `ai-memory-cli` helper
-- `AI Memory watch` runs the local watcher on Windows and dev installs
-- `AI Memory mcp-server` runs the local stdio MCP server for Codex on Windows and dev installs
+- `ai-memory-macos.zip`: signed and notarized macOS application bundle.
+- `ai-memory-windows.zip`: standalone Windows executable.
 
-Create a release by pushing a tag:
+Both packages include the pinned rclone helper and its license. Users do not need to install Python, Node.js, or rclone.
 
-```bash
-git tag v0.3.3
-git push origin v0.3.3
-```
+## Required GitHub Secrets
 
-GitHub Actions builds:
+Configure these repository Actions secrets before publishing a release:
 
-- `ai-memory-macos.zip`
-- `ai-memory-windows.zip`
+| Secret | Value |
+| --- | --- |
+| `APPLE_CERTIFICATE_P12_BASE64` | Developer ID Application certificate and private key exported as PKCS#12, then Base64 encoded |
+| `APPLE_CERTIFICATE_PASSWORD` | Password used when exporting the PKCS#12 file |
+| `APPLE_TEAM_ID` | Apple Developer Team ID |
+| `APPLE_ID` | Apple ID used for notarization |
+| `APPLE_APP_PASSWORD` | App-specific password created for the Apple ID |
 
-The release executable opens a local browser UI. It currently supports:
+Do not commit the `.p12` file, its password, or Apple credentials to the repository.
 
-- a compact French dashboard with archive size and live watcher/cloud health
-- one action to enable automatic collection, including historical sessions
-- settings for Google Drive, MCP, login startup, import and integrity checks
-- a native macOS status item that remains when the browser closes
-- single-instance protection and background login startup without opening a browser
+## macOS Signing Requirements
 
-V0.2 adds Google Drive OAuth, automatic bidirectional synchronization, full raw backups, import verification and storage sizes. The helper is bundled in each release; no separate rclone installation or terminal configuration is required. `scripts/fetch_rclone.py` pins rclone v1.75.1 and checks its SHA-256 before packaging, and includes its MIT license.
+The PKCS#12 archive must contain a valid **Developer ID Application** certificate and its matching private key. An iOS Distribution or Apple Development certificate cannot sign a macOS application distributed outside the Mac App Store.
 
-V0.3 adds the simplified dashboard and native macOS menu-bar companion. macOS desktop dependencies include PyObjC Cocoa. Local HTML, CSS, JavaScript and MIT-licensed Lucide icons are bundled with `--collect-data aimemory`; there is no CDN request at runtime. `LSUIElement` keeps the companion out of the Dock. The watcher runs independently: quitting the menu interface does not stop collection. Login launch is managed by a separate `io.github.jujudnt.ai-memory.menubar` LaunchAgent and can be disabled in settings.
+The release workflow:
 
-V0.3.2 adds iCloud Drive, OneDrive, Dropbox and custom synchronized-folder destinations through local provider folders, plus clearer Google Drive quota-full errors.
+1. creates a temporary keychain on the GitHub runner;
+2. imports the Developer ID identity and Apple G2 intermediate certificate;
+3. builds the application and bundled helper executables;
+4. signs every Mach-O binary with the hardened runtime and a secure timestamp;
+5. verifies the complete application signature;
+6. submits the ZIP to Apple's notary service;
+7. staples and validates the notarization ticket;
+8. verifies Gatekeeper acceptance;
+9. publishes both platform archives to GitHub Releases.
 
-V0.3.3 lets the desktop UI change or disconnect the cloud destination while a transfer is running by cancelling the active transfer first, instead of surfacing a lock-file error.
+## Publish a Version
 
-V0.4.1 separates Codex and Claude sessions launched from VS Code in the local index, while preserving their canonical archive IDs. It also improves iCloud Drive online setup guidance for Apple double authentication.
+Update the version in:
 
-V0.4.2 adds the missing iCloud Drive 2FA input field and passes rclone's `config_2fa` value during online iCloud setup. It also clarifies that iCloud Drive requires the normal Apple ID password plus 2FA, not an app-specific password.
+- `pyproject.toml`;
+- `src/aimemory/__init__.py`;
+- `src/aimemory/assets/desktop.html`.
 
-V0.4.3 turns iCloud Drive online setup into a two-step Apple 2FA flow, installs the same local MCP server for detected Codex, Claude Desktop and VS Code clients, documents the release-app MCP setup path, labels Claude Desktop/VS Code sources separately, and maps Codex/Claude conversations back to local project folders when the source exposes them.
-
-V0.4.4 fixes the real asynchronous Apple 2FA flow: once iCloud asks for validation, the open settings panel reveals the code field and changes the action to **Confirmer le code iCloud**. It also replaces the persistent full transfer cache with object-by-object synchronization, removes raw originals and historical revisions from the Mac only after their cloud writes succeed, preserves the local searchable conversation set, and resets cloud confirmation when the destination account changes.
-
-V0.4.5 preserves rclone's pending Apple authentication session between the password and 2FA steps. Confirming the six-digit code now resumes that session instead of triggering a second Apple login notification. The credentials fields are hidden and cleared while confirmation is pending. Before switching accounts or providers, AI Memory also performs a download-only pass against the old destination, then uploads the consolidated current conversation set to the new destination; a full old account therefore does not block migration. Connector tests cover Google Drive, Dropbox, OneDrive, iCloud Drive, local cloud folders, and old-to-new destination migration.
-
-V0.4.6 distinguishes successful Apple 2FA from the later Advanced Data Protection PCS-cookie approval. Accounts blocked by `Missing X-APPLE-WEBAUTH-TOKEN` now keep their accepted trust token and show a dedicated Web-access approval step with an idempotent retry, instead of returning to Apple ID/password/2FA fields or requesting another code. Existing pending v0.4.5 sessions are upgraded automatically.
-
-V0.4.10 recognizes iCloud Drive's partial local directory listings: when a raw backup delta or its parent has not arrived locally yet, synchronization waits and requests its download instead of falsely reporting a checksum mismatch. No local backups are cleaned until a complete verification succeeds.
-
-## macOS Gatekeeper
-
-The macOS build is ad-hoc signed, but it is not notarized with an Apple Developer ID yet. macOS may still show an unidentified developer or malware-verification warning after download.
-
-For this MVP, open it with right-click > Open, or remove quarantine manually:
+Run the tests, commit the version, then create and push the matching tag:
 
 ```bash
-xattr -dr com.apple.quarantine "/path/to/AI Memory.app"
+pytest -q
+npm test
+git tag -a vX.Y.Z -m "AI Memory vX.Y.Z"
+git push origin main
+git push origin vX.Y.Z
 ```
 
-Removing this warning completely requires a paid Apple Developer account, Developer ID signing certificate, and Apple notarization in the release workflow.
+The workflow publishes the release only after the macOS and Windows jobs both succeed.
+
+## Verify a Downloaded macOS Release
+
+After extracting the published ZIP:
+
+```bash
+codesign --verify --deep --strict --verbose=2 "AI Memory.app"
+xcrun stapler validate "AI Memory.app"
+spctl --assess --type execute --verbose=2 "AI Memory.app"
+```
+
+The final command should report `accepted` with `source=Notarized Developer ID`.

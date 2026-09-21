@@ -1,32 +1,29 @@
 # AI Memory Roadmap
 
-## Implemented in this MVP
+## Available Now
 
-- Codex JSONL discovery and parsing
+- Codex, Claude Code, Claude Desktop coding-session, Claude-in-VS-Code, and VS Code chat discovery
 - Source-independent normalized conversation schema
-- Project identity from normalized Git remotes, with path fallback
-- Compressed local archives
-- SQLite metadata and FTS5 search
-- CLI for doctor, import, search, get, rebuild, local-folder sync, MCP config, and watcher status
-- Transport-neutral MCP tool handlers
-- Real stdio MCP entry point through `aimemory-mcp`
-- Polling watcher with a status file for desktop UI integration
-- First local-browser desktop UI
-- GitHub Actions CI and release builds for macOS and Windows
-- Google Drive browser OAuth using bundled, checksum-verified rclone
-- Immutable bidirectional cloud archive synchronization and automatic local reindexing
-- Raw Codex backups and source-to-archive integrity verification
-- Correct fork/session identity and custom tool-call preservation
-- Visible archive/index/total storage sizes and cloud transfer activity
-- Process-level locks for watcher singleton and shared data operations
+- Project identity from source metadata, Git remotes, and working-directory fallback
+- Compressed original backups and immutable normalized revisions
+- SQLite metadata and FTS5 full-text search
+- Local stdio MCP server for Codex, Claude Desktop, and VS Code
+- Polling watcher with automatic login startup and status reporting
+- Desktop dashboard and native macOS menu-bar companion
+- Google Drive, Dropbox, OneDrive, and iCloud Drive online connections
+- iCloud Drive, Dropbox, OneDrive, and custom synchronized-folder destinations
+- Bidirectional synchronization, checksum verification, and local index rebuilds
+- Cloud-confirmed cleanup of heavy local originals and historical revisions
+- Destination migration, quota handling, transfer resumption, and integrity audits
+- Signed and Apple-notarized macOS releases plus Windows release builds
 
-## Next Phase
+## Planned
 
-1. Add deterministic chunking around user/assistant/tool groups.
-2. Add local embeddings and LanceDB behind an optional semantic-search interface.
-3. Replace polling with the watchdog-based background collector.
-4. Improve the desktop UI with provider setup, onboarding steps, and tray/menu-bar mode.
-5. Add direct OAuth for iCloud Drive, OneDrive and Dropbox (their existing synchronized folders already work).
-6. Add GitHub private repository provider with visibility checks.
-7. Add optional encrypted archives using established cryptographic libraries and OS-native key storage.
-8. Build the desktop onboarding flow on top of the same `MemoryService`.
+1. Add deterministic chunking around user, assistant, and tool-call groups.
+2. Add optional local embeddings and vector search using an established storage engine.
+3. Replace or complement polling with filesystem event collection.
+4. Add a dedicated Cursor adapter when a stable local format is available.
+5. Import Claude Web, Cowork, and Design conversations when a stable local export or supported API exists.
+6. Add a private GitHub repository storage provider with visibility checks.
+7. Add optional end-to-end encrypted archives using established cryptographic libraries and OS-native key storage.
+8. Expand automated recovery and cross-platform end-to-end tests for every cloud provider.
