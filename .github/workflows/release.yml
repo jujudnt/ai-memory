@@ -14,6 +14,7 @@ jobs:
     name: Build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
@@ -52,7 +53,14 @@ jobs:
           curl --fail --location --silent --show-error \
             https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
             --output "$RUNNER_TEMP/DeveloperIDG2CA.cer"
-          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" -A
+          if ! security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KEYCHAIN_PATH" -A \
+            2>"$RUNNER_TEMP/developer-id-g2-import.log"; then
+            if ! grep -q "already exists in the keychain" "$RUNNER_TEMP/developer-id-g2-import.log"; then
+              cat "$RUNNER_TEMP/developer-id-g2-import.log" >&2
+              exit 1
+            fi
+            echo "Developer ID G2 intermediate certificate is already installed."
+          fi
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
