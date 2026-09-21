@@ -18,6 +18,7 @@ from aimemory.cloud.google_drive import rclone_binary
 from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, validate_sync_root
 from aimemory.cloud.rclone_provider import RcloneCloudProvider
 from aimemory.cloud.destination import remote_path
+from aimemory.archive.json_archive import JsonArchive
 from aimemory.archive.raw_backup import RAW_PATTERN, read_raw
 from aimemory.state import atomic_write, now, read_json, write_json
 
@@ -61,33 +62,67 @@ class CloudSync:
                 if destination_changed:
                     known = {}
                 remote_objects = remote.list(progress)
-                known = {relative: True for relative in known if relative in remote_objects}
+                current_sources = _current_source_paths(self.service)
+                redundant_snapshots = _redundant_snapshot_objects(self.paths, current_sources)
+                remote_redundant = redundant_snapshots & remote_objects
+                usable_remote_objects = remote_objects - remote_redundant
+                known = {relative: True for relative in known if relative in usable_remote_objects}
                 local_objects = list(
                     _iter_local_objects(
                         self.paths.archive,
                         include_current_sources=True,
+                        current_source_paths=current_sources,
+                        excluded=redundant_snapshots,
                     )
                 )
                 uploads = [] if pull_only else [
-                    (relative, path) for relative, path in local_objects if relative not in remote_objects
+                    (relative, path) for relative, path in local_objects if relative not in usable_remote_objects
                 ]
                 if uploads and config["provider"] in LOCAL_FOLDER_PROVIDERS:
                     _ensure_available_space_for_files((path for _, path in uploads), remote.root)
-                for index, (relative, path) in enumerate(uploads, start=1):
-                    check_cancelled(self.paths)
-                    progress("uploading", object_count=len(remote_objects), transfers=index - 1, totalTransfers=len(uploads))
-                    remote.upload(path, relative)
-                    remote_objects.add(relative)
-                    known[relative] = True
-                    progress("uploading", object_count=len(remote_objects), transfers=index,
-                             totalTransfers=len(uploads))
+                if uploads and hasattr(remote, "upload_many"):
+                    completed = 0
+                    for start in range(0, len(uploads), 50):
+                        check_cancelled(self.paths)
+                        batch = uploads[start:start + 50]
+                        progress(
+                            "uploading",
+                            object_count=len(usable_remote_objects),
+                            transfers=completed,
+                            totalTransfers=len(uploads),
+                        )
+                        remote.upload_many(batch)
+                        for relative, _ in batch:
+                            usable_remote_objects.add(relative)
+                            known[relative] = True
+                        completed += len(batch)
+                        progress(
+                            "uploading",
+                            object_count=len(usable_remote_objects),
+                            transfers=completed,
+                            totalTransfers=len(uploads),
+                        )
+                else:
+                    for index, (relative, path) in enumerate(uploads, start=1):
+                        check_cancelled(self.paths)
+                        progress("uploading", object_count=len(usable_remote_objects), transfers=index - 1, totalTransfers=len(uploads))
+                        remote.upload(path, relative)
+                        usable_remote_objects.add(relative)
+                        known[relative] = True
+                        progress("uploading", object_count=len(usable_remote_objects), transfers=index,
+                                 totalTransfers=len(uploads))
                 if not uploads:
-                    progress("uploading", object_count=len(remote_objects))
+                    progress("uploading", object_count=len(usable_remote_objects))
+                if remote_redundant and not pull_only:
+                    check_cancelled(self.paths)
+                    remote.delete_many(remote_redundant)
+                    for relative in remote_redundant:
+                        known.pop(relative, None)
                 progress("verifying")
                 indexed = 0
                 incoming = self.paths.cache / "incoming"
                 shutil.rmtree(incoming, ignore_errors=True)
-                downloads = sorted(path for path in remote_objects if path not in known)
+                downloads = sorted(path for path in usable_remote_objects if path not in known)
                 for index, relative_string in enumerate(downloads, start=1):
                     check_cancelled(self.paths)
                     relative = Path(relative_string)
@@ -116,7 +151,7 @@ class CloudSync:
                                 incoming,
                                 relative_string,
                                 remote,
-                                remote_objects,
+                                usable_remote_objects,
                             )
                             read_raw(incoming, relative.as_posix())
                         except CloudFolderPending:
@@ -133,13 +168,22 @@ class CloudSync:
                     if len(known) % 10 == 0:
                         progress("verifying", object_count=len(known))
                 for relative_string, _ in local_objects:
-                    if relative_string in remote_objects:
+                    if relative_string in usable_remote_objects:
                         known[relative_string] = True
                 known["__remote_identity__"] = remote_identity
                 write_json(self.paths.state / "synced-objects.json", known)
-                retention = prune_synced_local_copies(self.paths, known)
+                retention = prune_synced_local_copies(
+                    self.paths,
+                    known,
+                    redundant_snapshots=redundant_snapshots,
+                    current_source_paths=_current_source_paths(self.service),
+                )
+                write_json(
+                    self.paths.state / "semantic-cleanup.json",
+                    {"version": 1, "completed_at": now(), "removed_count": len(redundant_snapshots)},
+                )
                 status.update(status="synced", last_success_at=now(), indexed=indexed,
-                              object_count=len(remote_objects), retention=retention, error=None)
+                              object_count=len(usable_remote_objects), retention=retention, error=None)
             except CloudFolderPending as exc:
                 status.update(status="waiting_local_cloud", error=str(exc), heartbeat_at=now(),
                               requires_action=False, message=str(exc))
@@ -225,7 +269,12 @@ def _ensure_available_space_for_files(paths, destination: Path) -> None:
         )
 
 
-def prune_synced_local_copies(paths, known: dict) -> dict:
+def prune_synced_local_copies(
+    paths,
+    known: dict,
+    redundant_snapshots: set[str] | None = None,
+    current_source_paths: set[Path] | None = None,
+) -> dict:
     removable_roots = ("raw/", "snapshots/")
     freed = 0
     removed: list[str] = []
@@ -241,12 +290,33 @@ def prune_synced_local_copies(paths, known: dict) -> dict:
             _prune_empty_parents(target.parent, paths.archive)
         except OSError:
             continue
+    for relative in sorted(redundant_snapshots or set()):
+        target = paths.archive / relative
+        if not target.is_file():
+            continue
+        freed += target.stat().st_size
+        target.unlink()
+        removed.append(relative)
+        _prune_empty_parents(target.parent, paths.archive)
+    removed_sources = 0
+    if current_source_paths is not None:
+        current_ids = {path.name.split(".json.", 1)[0] for path in current_source_paths}
+        for target in sorted((paths.archive / "sources").rglob("*.json.*")):
+            if target.resolve() in current_source_paths:
+                continue
+            if target.name.split(".json.", 1)[0] not in current_ids:
+                continue
+            freed += target.stat().st_size
+            target.unlink()
+            removed_sources += 1
+            _prune_empty_parents(target.parent, paths.archive)
     status = {
         "last_run_at": now(),
         "freed_bytes": freed,
-        "removed_count": len(removed),
+        "removed_count": len(removed) + removed_sources,
         "removed_raw_count": sum(1 for path in removed if path.startswith("raw/")),
         "removed_revision_count": sum(1 for path in removed if path.startswith("snapshots/")),
+        "removed_source_count": removed_sources,
         "removed": removed[-20:],
     }
     write_json(paths.state / "retention-status.json", status)
@@ -262,12 +332,20 @@ def _prune_empty_parents(path: Path, stop: Path) -> None:
         path = path.parent
 
 
-def _iter_local_objects(archive: Path, include_current_sources: bool = False):
+def _iter_local_objects(
+    archive: Path,
+    include_current_sources: bool = False,
+    current_source_paths: set[Path] | None = None,
+    excluded: set[str] | None = None,
+):
     seen: set[str] = set()
+    excluded = excluded or set()
     # Send one immutable current revision per conversation before its history.
     if include_current_sources:
         for path in sorted((archive / "sources").rglob("*.json.*")):
             if not path.is_file() or path.is_symlink() or path.name.startswith("."):
+                continue
+            if current_source_paths is not None and path.resolve() not in current_source_paths:
                 continue
             suffix = ".json.zst" if path.name.endswith(".json.zst") else ".json.gz"
             conversation_id = path.name.removesuffix(suffix)
@@ -279,6 +357,8 @@ def _iter_local_objects(archive: Path, include_current_sources: bool = False):
             target = archive / relative
             if not target.exists():
                 atomic_write(target, payload)
+            if relative in excluded:
+                continue
             seen.add(relative)
             yield relative, target
     for category in ("snapshots", "raw"):
@@ -287,9 +367,74 @@ def _iter_local_objects(archive: Path, include_current_sources: bool = False):
                 relative = path.relative_to(archive).as_posix()
                 if not _allowed_object(relative):
                     raise ValueError("Unexpected object in local archive")
-                if relative not in seen:
+                if relative not in seen and relative not in excluded:
                     seen.add(relative)
                     yield relative, path
+
+
+def _current_source_paths(service) -> set[Path]:
+    if not hasattr(service, "db"):
+        return set()
+    return {
+        Path(item["archive_path"]).resolve()
+        for item in service.db.list_conversations(limit=1_000_000)
+        if item.get("archive_path")
+    }
+
+
+def _redundant_snapshot_objects(paths, current_source_paths: set[Path]) -> set[str]:
+    state_path = paths.state / "semantic-cleanup.json"
+    state = read_json(state_path)
+    if state.get("version") == 1 and state.get("completed_at"):
+        return set()
+    if state.get("version") == 1 and state.get("pending"):
+        return set(state["pending"])
+
+    archive = JsonArchive(paths.archive)
+    preferred: set[str] = set()
+    for source in current_source_paths:
+        if not source.is_file():
+            continue
+        payload = source.read_bytes()
+        preferred.add(
+            f"snapshots/{source.name.split('.json.', 1)[0]}/"
+            f"{hashlib.sha256(payload).hexdigest()}{''.join(source.suffixes)}"
+        )
+
+    groups: dict[str, list[str]] = {}
+    for path in sorted((paths.archive / "snapshots").rglob("*.json.*")):
+        try:
+            conversation = archive.read(path)
+        except Exception:
+            continue
+        value = conversation.to_dict()
+        semantic = {
+            "schema_version": value["schema_version"],
+            "id": value["id"],
+            "source_session_id": value["source_session_id"],
+            "created_at": value["created_at"],
+            "updated_at": value["updated_at"],
+            "project": value["project"],
+            "model": value["model"],
+            "title": value["title"],
+            "messages": value["messages"],
+            "tool_calls": value["tool_calls"],
+            "files_referenced": value["files_referenced"],
+            "commands": value["commands"],
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(semantic, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        groups.setdefault(fingerprint, []).append(path.relative_to(paths.archive).as_posix())
+
+    redundant: set[str] = set()
+    for relatives in groups.values():
+        if len(relatives) < 2:
+            continue
+        keeper = next((relative for relative in relatives if relative in preferred), min(relatives))
+        redundant.update(relative for relative in relatives if relative != keeper)
+    write_json(state_path, {"version": 1, "pending": sorted(redundant), "created_at": now()})
+    return redundant
 
 
 def _hydrate_raw_dependencies(
@@ -427,6 +572,13 @@ class LocalArchiveRemote:
             raise
         atomic_write(local_path, payload)
 
+    def delete_many(self, relatives: set[str]) -> None:
+        for relative in sorted(relatives):
+            target = self.root / relative
+            if target.exists():
+                self._io(target.unlink, target)
+                _prune_empty_parents(target.parent, self.root)
+
     def wait_for_item(self, relative: str) -> str | None:
         if not self.icloud:
             return None
@@ -472,8 +624,30 @@ class RcloneArchiveRemote:
     def upload(self, local_path: Path, relative: str) -> None:
         self._run(["copyto", str(local_path), f"{self.remote}/{relative}"], timeout=600)
 
+    def upload_many(self, uploads: list[tuple[str, Path]]) -> None:
+        selection = self.paths.cache / "cloud-upload-objects.txt"
+        atomic_write(
+            selection,
+            ("\n".join(relative for relative, _ in uploads) + "\n").encode("utf-8"),
+        )
+        try:
+            self._run(
+                ["copy", str(self.paths.archive), self.remote, "--files-from", str(selection)],
+                timeout=1800,
+            )
+        finally:
+            selection.unlink(missing_ok=True)
+
     def download(self, relative: str, local_path: Path) -> None:
         self._run(["copyto", f"{self.remote}/{relative}", str(local_path)], timeout=600)
+
+    def delete_many(self, relatives: set[str]) -> None:
+        selection = self.paths.cache / "redundant-cloud-objects.txt"
+        atomic_write(selection, ("\n".join(sorted(relatives)) + "\n").encode("utf-8"))
+        try:
+            self._run(["delete", self.remote, "--files-from", str(selection)], timeout=600)
+        finally:
+            selection.unlink(missing_ok=True)
 
     def _run(self, args: list[str], timeout: int) -> str:
         result = subprocess.run(

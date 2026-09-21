@@ -101,7 +101,7 @@ Le bouton installe automatiquement AI Memory dans tous les clients détectés su
 
 Les trois configurations pointent vers la copie autonome `~/.ai-memory/bin/ai-memory-cli`, jamais vers l'emplacement de l'application. Vous pouvez donc déplacer AI Memory après l'activation. Sous Windows, cette copie est placée dans `%LOCALAPPDATA%\AI Memory\bin`.
 
-L'installation dans un client n'installe pas automatiquement le MCP dans les autres : le bouton AI Memory configure en une fois tous ceux qui sont présents. Si vous installez plus tard un nouveau client, cliquez de nouveau sur **Activer**. Après une mise à jour depuis une version antérieure à `0.4.17`, cliquez également une fois sur **Activer** pour migrer l'ancienne configuration et le composant de sauvegarde cloud.
+L'installation dans un client n'installe pas automatiquement le MCP dans les autres : le bouton AI Memory configure en une fois tous ceux qui sont présents. Si vous installez plus tard un nouveau client, cliquez de nouveau sur **Activer**. Après une mise à jour depuis une version antérieure à `0.4.18`, cliquez également une fois sur **Activer** pour migrer l'ancienne configuration et le composant de sauvegarde cloud.
 
 #### Vérifier que le MCP est connecté
 
@@ -152,6 +152,8 @@ AI Memory affiche séparément :
 - **Total sur cet ordinateur** : ensemble des fichiers AI Memory locaux, y compris fichiers temporaires et état de synchronisation.
 
 Après une sauvegarde cloud vérifiée, AI Memory supprime automatiquement du Mac les originaux compressés et les anciennes révisions lourdes qui sont confirmés dans le cloud. Les conversations courantes et l'index restent disponibles localement afin que le MCP soit rapide et fonctionne hors ligne.
+
+Les transferts sont adressés par le hash du contenu : relancer une synchronisation ne crée pas une seconde copie du même objet. AI Memory fusionne également les snapshots dont le contenu conversationnel est identique, même si Codex ou Claude les a signalés sous un autre client, puis retire ces variantes redondantes du cloud.
 
 ### Confidentialité et sécurité
 
@@ -388,7 +390,7 @@ The button configures every supported client detected on that computer:
 
 All three configurations point to the standalone copy at `~/.ai-memory/bin/ai-memory-cli`, never to the application location. You can therefore move AI Memory after enabling it. On Windows, the copy is installed under `%LOCALAPPDATA%\AI Memory\bin`.
 
-Installing MCP in one client does not install it in the others by itself. The AI Memory button handles all clients currently installed. If you install another client later, click **Activer** again. After upgrading from a version older than `0.4.17`, also click **Activer** once to migrate the previous configuration and cloud backup component.
+Installing MCP in one client does not install it in the others by itself. The AI Memory button handles all clients currently installed. If you install another client later, click **Activer** again. After upgrading from a version older than `0.4.18`, also click **Activer** once to migrate the previous configuration and cloud backup component.
 
 #### Verify the MCP connection
 
@@ -439,6 +441,8 @@ AI Memory reports these values separately:
 - **Total on this computer**: all local AI Memory files, including temporary files and synchronization state.
 
 After a verified cloud backup, AI Memory automatically removes compressed originals and large historical revisions from the Mac when they are confirmed in the cloud. Current conversations and the search index remain local so MCP stays fast and works offline.
+
+Transfers are content-addressed: restarting synchronization does not create another copy of the same object. AI Memory also merges snapshots with identical conversation content even when Codex or Claude reported them under another client, then removes those redundant variants from the cloud.
 
 ### Privacy and security
 

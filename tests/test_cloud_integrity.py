@@ -124,6 +124,38 @@ def test_legacy_inherited_session_id_cannot_replace_repaired_archive(tmp_path):
     assert b.get_conversation(current.id).metadata["parser_version"] == 4
 
 
+def test_same_content_from_another_client_label_does_not_create_revision(tmp_path):
+    service = memory(tmp_path / "memory")
+    codex = tmp_path / "codex"
+    session(codex)
+    service.import_codex(codex)
+    current = service.get_conversation(service.list_conversations()[0]["id"])
+    before = list((service.paths.archive / "snapshots").rglob("*.json.*"))
+
+    variant = replace(current, source="vscode-codex", metadata={**current.metadata, "source_path": "vscode"})
+
+    assert service.accept_conversation(variant) is False
+    assert list((service.paths.archive / "snapshots").rglob("*.json.*")) == before
+
+
+def test_sync_removes_semantically_duplicate_snapshots(tmp_path):
+    service = memory(tmp_path / "memory")
+    codex = tmp_path / "codex"
+    session(codex)
+    service.import_codex(codex)
+    current = service.get_conversation(service.list_conversations()[0]["id"])
+    service.archive.write(
+        replace(current, source="vscode-codex", metadata={**current.metadata, "source_path": "vscode"})
+    )
+    remote = tmp_path / "remote"
+    write_json(service.paths.state / "cloud.json", {"provider": "local-folder", "root": str(remote)})
+
+    result = service.sync_now()
+
+    assert len(list((remote / "snapshots").rglob("*.json.*"))) == 1
+    assert result["retention"]["removed_source_count"] == 1
+
+
 def test_cloud_transfer_does_not_block_local_import(tmp_path, monkeypatch):
     from filelock import FileLock
     service = memory(tmp_path / "memory")

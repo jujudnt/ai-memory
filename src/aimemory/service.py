@@ -119,6 +119,8 @@ class MemoryService:
 
     def accept_conversation(self, conversation: NormalizedConversation) -> bool:
         existing = self.get_conversation(conversation.id)
+        if existing and _conversation_content_digest(existing) == _conversation_content_digest(conversation):
+            return False
         def revision_key(value):
             digest = hashlib.sha256(json.dumps(value.to_dict(), sort_keys=True).encode()).hexdigest()
             return (value.metadata.get("parser_version", 0), value.updated_at or "",
@@ -154,7 +156,6 @@ class MemoryService:
             self.index_archive(path)
             count += 1
         return count
-
     def search(
         self,
         query: str,
@@ -182,7 +183,7 @@ class MemoryService:
         status = self.db.status()
         status["home"] = str(self.paths.home)
         status["archive"] = str(self.paths.archive)
-        status["archive_count"] = len(self.archive.iter_archives())
+        status["archive_count"] = status["conversation_count"]
         config = read_json(self.paths.state / "cloud.json")
         status["storage"] = {
             "provider": config.get("provider", "local-folder"),
@@ -222,3 +223,24 @@ class MemoryService:
         from aimemory.audit import audit_codex
         with self.lock:
             return audit_codex(self, codex_home)
+
+
+def _conversation_content_digest(conversation: NormalizedConversation) -> str:
+    payload = conversation.to_dict()
+    canonical = {
+        "schema_version": payload["schema_version"],
+        "id": payload["id"],
+        "source_session_id": payload["source_session_id"],
+        "created_at": payload["created_at"],
+        "updated_at": payload["updated_at"],
+        "project": payload["project"],
+        "model": payload["model"],
+        "title": payload["title"],
+        "messages": payload["messages"],
+        "tool_calls": payload["tool_calls"],
+        "files_referenced": payload["files_referenced"],
+        "commands": payload["commands"],
+    }
+    return hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()

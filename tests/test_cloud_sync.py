@@ -56,6 +56,38 @@ def test_upload_counter_counts_only_completed_files(tmp_path, monkeypatch):
     assert status["transfers"] == status["object_count"] == 2
 
 
+def test_bulk_uploads_are_batched_and_counted_after_completion(tmp_path, monkeypatch):
+    paths = AppPaths(tmp_path, *(tmp_path / name for name in
+                               ("archive", "db", "vectors", "cache", "logs", "state")))
+    paths.ensure()
+    write_json(paths.state / "cloud.json", {"provider": "icloud-online", "root": "AI-Memory"})
+    for index in range(121):
+        digest = f"{index:064x}"
+        path = paths.archive / f"snapshots/thread-{index}/{digest}.json.zst"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(str(index).encode())
+    batches = []
+
+    class Remote:
+        def list(self, progress):
+            return set()
+
+        def upload_many(self, uploads):
+            status = read_json(paths.state / "sync-status.json")
+            assert status["transfers"] == sum(len(batch) for batch in batches)
+            batches.append([relative for relative, _ in uploads])
+
+        def download(self, relative, local_path):
+            raise AssertionError("No downloads expected")
+
+    monkeypatch.setattr("aimemory.sync.cloud_sync._remote_archive", lambda *args: Remote())
+    status = CloudSync(SimpleNamespace(paths=paths)).run()
+
+    assert [len(batch) for batch in batches] == [50, 50, 21]
+    assert status["status"] == "synced"
+    assert status["transfers"] == status["object_count"] == 121
+
+
 def test_icloud_retries_inaccessible_subfolder_without_omitting_files(tmp_path, monkeypatch):
     path = tmp_path / "snapshots/thread" / ("a" * 64 + ".json.zst")
     path.parent.mkdir(parents=True)

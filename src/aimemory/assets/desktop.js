@@ -158,7 +158,7 @@ function render(data) {
   $("#health-label").textContent = health.label;
   $("#watcher-title").textContent = health.label;
   $("#overview-subtitle").textContent =
-    `${data.archive_count || 0} archives locales \u00b7 ${configured ? "Sauvegarde cloud connect\u00e9e" : "Sauvegarde sur cet ordinateur"}`;
+    `${data.archive_count || 0} conversations locales \u00b7 ${configured ? "Sauvegarde cloud connect\u00e9e" : "Sauvegarde sur cet ordinateur"}`;
   $("#conversation-count").textContent = (
     data.conversation_count || 0
   ).toLocaleString("fr-FR");
@@ -235,7 +235,7 @@ function render(data) {
     cloudText += ` \u00b7 ${elapsed(sync.last_success_at)}`;
   else if (configured && data.sync_active) {
     if (sync.totalTransfers > 0)
-      cloudText += ` \u00b7 ${sync.transfers || 0} / ${sync.totalTransfers} fichiers`;
+      cloudText += ` \u00b7 ${sync.transfers || 0} / ${sync.totalTransfers} objets uniques`;
     else if (sync.totalBytes > 0)
       cloudText += ` \u00b7 ${size(sync.bytes)} / ${size(sync.totalBytes)} \u00b7 ${size(sync.speed)}/s`;
   }
@@ -338,6 +338,9 @@ function render(data) {
   } else if (pendingIcloud && !icloudAwaiting2FA) {
     $("#provider").value = "icloud-online";
     revealIcloud2FA();
+  } else if (data.job?.error && data.sync_active && !sync.error) {
+    lastJobMessage = data.job.message;
+    notice("");
   } else if (data.job?.message && data.job.message !== lastJobMessage) {
     lastJobMessage = data.job.message;
     notice(data.job.message, data.job.error);

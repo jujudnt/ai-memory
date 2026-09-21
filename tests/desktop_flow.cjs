@@ -37,5 +37,8 @@ assert.equal(el('cloud-folder').value, 'Sauvegardes/Conversations');
 w.render({...base, sync_active:false, sync:{status:'waiting_local_cloud', error:'Dossier indisponible'}});
 assert.match(el('cloud-detail').textContent, /En attente du dossier cloud local/);
 assert.match(el('cloud-detail').textContent, /Dossier indisponible/);
+w.render({...base, storage:{...base.storage, provider:'icloud-online'}, sync_active:true,
+  sync:{status:'uploading', error:null}, job:{error:true, message:'Ancienne erreur iCloud'}});
+assert.equal(el('message').hidden, true);
 dom.window.close();
 console.log('Desktop auth transitions and folder editing passed');
