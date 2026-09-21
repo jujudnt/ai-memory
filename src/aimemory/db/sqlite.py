@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -13,11 +14,19 @@ class MemoryDatabase:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def connect(self):
         conn = sqlite3.connect(self.path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def initialize(self) -> None:
         with self.connect() as conn:

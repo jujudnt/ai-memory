@@ -1,11 +1,21 @@
 import json
+import sqlite3
 
 import pytest
 
 from aimemory.adapters.claude import ClaudeAdapter
 from aimemory.adapters.vscode import VSCodeAdapter
 from aimemory.config import AppPaths
+from aimemory.db.sqlite import MemoryDatabase
 from aimemory.service import MemoryService
+
+
+def test_database_connections_close_after_context(tmp_path):
+    database = MemoryDatabase(tmp_path / "memory.sqlite")
+    with database.connect() as connection:
+        connection.execute("CREATE TABLE sample (value TEXT)")
+    with pytest.raises(sqlite3.ProgrammingError):
+        connection.execute("SELECT 1")
 
 
 def test_import_codex_and_search(tmp_path):
