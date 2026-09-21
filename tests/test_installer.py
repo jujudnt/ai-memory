@@ -1,5 +1,6 @@
 import json
 import os
+import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -150,7 +151,8 @@ def test_install_all_mcp_configs_copies_frozen_runtime_to_stable_path(tmp_path: 
     assert installed.read_bytes() == b"standalone-mcp"
     if os.name != "nt":
         assert installed.stat().st_mode & 0o111
-    assert str(installed) in codex_config.read_text(encoding="utf-8")
+    config = tomllib.loads(codex_config.read_text(encoding="utf-8"))
+    assert config["mcp_servers"]["ai-memory"]["command"] == str(installed)
 
 
 def test_install_watcher_short_circuits_when_already_running():
