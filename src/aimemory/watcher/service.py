@@ -96,7 +96,8 @@ class WatcherService:
                 (sync_status.get("retry_after") or 0) > time.time() or
                 read_json(self.service.paths.state / "sync-preferences.json").get("paused")):
             return
-        if (thread is None or not thread.is_alive()) and (requested or time.monotonic() - getattr(self, "_last_sync", -60) >= 60):
+        sync_interval = 15 if sync_status.get("status") == "waiting_local_cloud" else 60
+        if (thread is None or not thread.is_alive()) and (requested or time.monotonic() - getattr(self, "_last_sync", -60) >= sync_interval):
             self._last_sync = time.monotonic()
             def synchronize():
                 try:

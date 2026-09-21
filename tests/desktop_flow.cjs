@@ -60,5 +60,8 @@ w.render({...base, sync_paused:true, sync:{status:'paused'}});
 assert.match(el('cloud-detail').textContent, /suspendus/);
 w.render({...base, sync:{status:'synced', confirmation:'local_folder'}});
 assert.match(el('cloud-detail').textContent, /Copie locale/);
+assert.equal(w.sourceName('codex-desktop'), 'Codex Desktop');
+assert.equal(w.sourceName('vscode-codex'), 'Codex VS Code');
+assert.equal(w.sourceName('codex'), 'Codex');
 dom.window.close();
 console.log('Desktop auth transitions and folder editing passed');

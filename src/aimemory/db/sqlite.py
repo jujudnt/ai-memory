@@ -342,7 +342,13 @@ class MemoryDatabase:
     def archive_entries(self) -> list[dict]:
         self.initialize()
         with self.connect() as conn:
-            return [dict(row) for row in conn.execute("SELECT id, archive_path FROM conversations")]
+            return [dict(row) for row in conn.execute("SELECT id, source, archive_path FROM conversations")]
+
+    def update_source(self, conversation_id: str, source: str) -> None:
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("UPDATE conversations SET source = ? WHERE id = ?", (source, conversation_id))
+            conn.execute("UPDATE conversations_fts SET source = ? WHERE conversation_id = ?", (source, conversation_id))
 
     def get_conversation_row(self, conversation_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -379,7 +385,7 @@ def _filters(source, project, date_from, date_to, prefix=""):
     if source and source != "all":
         sources = {
             "claude": ("claude", "claude-code", "claude-desktop", "vscode-claude"),
-            "codex": ("codex", "vscode-codex"),
+            "codex": ("codex", "codex-desktop", "vscode-codex"),
             "vscode": ("vscode", "vscode-codex", "vscode-claude"),
         }.get(source, (source,))
         clauses.append(f"{prefix}source IN ({','.join('?' for _ in sources)})")

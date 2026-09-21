@@ -23,6 +23,7 @@ from aimemory.cloud.errors import CloudError, error_category
 from aimemory.archive.json_archive import JsonArchive
 from aimemory.archive.raw_backup import RAW_PATTERN, RawIntegrityError, load_delta, validate_raw
 from aimemory.state import atomic_write, now, read_json, write_json
+from aimemory.sources import CODEX_SOURCES
 
 OBJECT_PATTERN = re.compile(
     r"(?:snapshots/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json\.(?:gz|zst)|" + RAW_PATTERN + ")"
@@ -46,7 +47,8 @@ class CloudSync:
             if not config:
                 return {"status": "not-configured"}
             status = read_json(self.status_path)
-            status.update(status="preparing", started_at=now(), error=None, requires_action=False,
+            status.update(status="preparing", started_at=now(), error=None, message=None,
+                          error_category=None, retry_after=None, requires_action=False,
                           transfers=0, totalTransfers=0, bytes=0, totalBytes=0, speed=0)
             status_lock = threading.RLock()
             last_beat = [0.0]
@@ -187,7 +189,7 @@ class CloudSync:
                         if conversation.id != relative.parts[1]:
                             raise ValueError("Cloud archive identity mismatch")
                         # Skip already present local snapshots; remote revisions are indexed.
-                        legacy_codex = conversation.source == "codex" and conversation.metadata.get("parser_version", 0) < 2
+                        legacy_codex = conversation.source in CODEX_SOURCES and conversation.metadata.get("parser_version", 0) < 2
                         if not legacy_codex:
                             with self.service.lock.acquire(timeout=60):
                                 indexed += int(self.service.accept_conversation(conversation))
@@ -254,8 +256,16 @@ class CloudSync:
                               confirmation="local_folder" if not can_prune else "remote")
             except CloudFolderPending as exc:
                 status.update(status="waiting_local_cloud", error=str(exc), heartbeat_at=now(),
-                              requires_action=False, message=str(exc))
+                              requires_action=False, message=str(exc), retry_after=time.time() + 15)
             except Exception as exc:
+                # Resolution, disk-space checks and cleanup can hit a busy cloud
+                # placeholder too, before/after LocalArchiveRemote's read retries.
+                if (isinstance(exc, OSError) and exc.errno in {errno.EDEADLK, errno.EAGAIN, errno.EBUSY}
+                        and config.get("provider") in LOCAL_FOLDER_PROVIDERS):
+                    message = "Le dossier cloud prépare encore un fichier. Nouvelle tentative automatique dans quelques secondes."
+                    status.update(status="waiting_local_cloud", error=message, heartbeat_at=now(),
+                                  requires_action=False, message=message, retry_after=time.time() + 15)
+                    return status
                 category = getattr(exc, "category", "quota" if isinstance(exc, OSError) and exc.errno == errno.ENOSPC
                                    else "integrity" if isinstance(exc, ValueError) else "transient")
                 failures = status.get("failures", 0) + 1

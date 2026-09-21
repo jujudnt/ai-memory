@@ -15,6 +15,7 @@ from aimemory.adapters.base import DiscoveredSource, SourceSession
 from aimemory.config import default_codex_home
 from aimemory.models import DeviceIdentity, Message, NormalizedConversation, ProjectIdentity, ToolCall
 from aimemory.projects import identify_project
+from aimemory.sources import codex_source
 
 
 class CodexAdapter:
@@ -163,7 +164,7 @@ class CodexAdapter:
         project = codex_project or code_project
         model = turn_context.get("model") or session_meta.get("model") or session_meta.get("model_provider") or thread_meta.get("model_provider")
         title = _title_from_messages(messages) or thread_meta.get("title")
-        actual_source = "vscode-codex" if thread_meta.get("source") == "vscode" else self.source
+        actual_source = codex_source(session_meta)
 
         return NormalizedConversation(
             schema_version=1,

@@ -151,7 +151,7 @@ def test_codex_adapter_prefers_codex_sidebar_project_root(tmp_path):
     assert conversation.metadata["code_project"]["name"] == "ai-memory"
 
 
-def test_codex_adapter_labels_vscode_threads_from_state_database(tmp_path):
+def test_codex_adapter_labels_vscode_threads_from_explicit_originator(tmp_path):
     codex_home = tmp_path / ".codex"
     session = codex_home / "sessions" / "rollout-vscode-session.jsonl"
     write_jsonl(
@@ -160,7 +160,7 @@ def test_codex_adapter_labels_vscode_threads_from_state_database(tmp_path):
             {
                 "timestamp": "2026-09-18T00:00:00Z",
                 "type": "session_meta",
-                "payload": {"session_id": "vscode-session", "timestamp": "2026-09-18T00:00:00Z"},
+                "payload": {"session_id": "vscode-session", "timestamp": "2026-09-18T00:00:00Z", "originator": "codex_vscode"},
             },
             {
                 "timestamp": "2026-09-18T00:01:00Z",

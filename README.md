@@ -145,6 +145,8 @@ La recherche accepte des dates ISO, un nom ou identifiant de projet, et les fami
 
 ### Utiliser plusieurs ordinateurs
 
+Le libellé **Codex Desktop** ou **Codex VS Code** repose sur l'origine explicite enregistrée dans la session. Le champ technique `source=vscode` est partagé par les deux applications et ne suffit pas à les distinguer. Sans origine explicite reconnue, AI Memory affiche simplement **Codex**. Les anciennes archives sont reconnues sans réenvoi pour ce seul changement de libellé.
+
 1. Installez AI Memory sur chaque ordinateur.
 2. Connectez la même destination et choisissez le même dossier distant.
 3. Attendez la fin de la synchronisation.
@@ -454,6 +456,8 @@ The MCP server exposes:
 Search supports ISO dates, a project name or ID, and the `codex`, `claude` and `vscode` source families including their variants. Unrelated folders are not merged solely because their names match. Projects created independently on different computers may retain distinct IDs.
 
 ### Use multiple computers
+
+The **Codex Desktop** or **Codex VS Code** label uses the explicit origin recorded in the session. Both applications can write the technical field `source=vscode`, so that field alone cannot distinguish them. Without a recognized explicit origin, AI Memory displays **Codex**. Existing archives are recognized without re-uploading them solely to change their label.
 
 1. Install AI Memory on each computer.
 2. Connect the same destination and select the same remote folder.

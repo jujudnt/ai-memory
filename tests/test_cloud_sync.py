@@ -184,3 +184,52 @@ def test_cloud_read_retries_busy_but_does_not_hide_permission_errors(tmp_path, m
         raise PermissionError(errno.EACCES, "Permission denied")
     with pytest.raises(PermissionError):
         remote._io(denied, source)
+
+
+@pytest.mark.parametrize("code", [errno.EDEADLK, errno.EAGAIN, errno.EBUSY])
+def test_busy_cloud_setup_waits_then_resumes_without_manual_reload(tmp_path, monkeypatch, code):
+    from test_cloud_integrity import memory
+    service = memory(tmp_path / "memory")
+    write_json(service.paths.state / "cloud.json", {"provider": "icloud-drive", "root": str(tmp_path / "cloud")})
+    from aimemory.sync import cloud_sync
+    original = cloud_sync._remote_archive
+    attempts = []
+    def remote(*args):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise OSError(code, "Resource deadlock avoided")
+        return original(*args)
+    monkeypatch.setattr(cloud_sync, "_remote_archive", remote)
+    pending = service.sync_now()
+    assert pending["status"] == "waiting_local_cloud"
+    assert pending["requires_action"] is False
+    assert "deadlock" not in pending["error"]
+    assert pending["retry_after"]
+    resumed = service.sync_now()
+    assert resumed["status"] == "synced"
+    assert resumed["error"] is None
+    assert resumed["message"] is None
+
+
+def test_waiting_cloud_retries_after_short_interval(tmp_path, monkeypatch):
+    from test_cloud_integrity import memory
+    from aimemory.watcher.service import WatcherService
+    service = memory(tmp_path / "memory")
+    watcher = WatcherService(service)
+    watcher._last_sync = 80
+    write_json(service.paths.state / "sync-status.json", {
+        "status": "waiting_local_cloud", "retry_after": 90,
+    })
+    monkeypatch.setattr(service, "import_all", lambda **kw: SimpleNamespace(
+        scanned=0, imported=0, skipped=0, errors=[]))
+    monkeypatch.setattr("aimemory.watcher.service.time.monotonic", lambda: 100)
+    monkeypatch.setattr("aimemory.watcher.service.time.time", lambda: 100)
+    started = []
+    class Thread:
+        def __init__(self, **kw):
+            pass
+        def start(self):
+            started.append(True)
+    monkeypatch.setattr("aimemory.watcher.service.threading.Thread", Thread)
+    watcher.scan_once()
+    assert started == [True]

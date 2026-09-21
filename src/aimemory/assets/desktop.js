@@ -567,6 +567,7 @@ function sourceName(source) {
       "claude-desktop": "Claude Desktop",
       vscode: "VS Code",
       "vscode-codex": "Codex VS Code",
+      "codex-desktop": "Codex Desktop",
       "vscode-claude": "Claude VS Code",
     }[source] || source
   );

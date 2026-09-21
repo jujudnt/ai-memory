@@ -19,6 +19,7 @@ from aimemory.config import AppPaths
 from aimemory.db import MemoryDatabase
 from aimemory.db.sqlite import file_hash
 from aimemory.models import NormalizedConversation
+from aimemory.sources import CODEX_SOURCES
 from aimemory.search import SearchService
 from aimemory.state import atomic_write, folder_bytes, now, read_json, write_json
 
@@ -45,6 +46,7 @@ class MemoryService:
 
     def import_codex(self, codex_home: Path | None = None, force: bool = False) -> ImportResult:
         with self.lock:
+            self._repair_codex_labels()
             return self._import_adapter(CodexAdapter(codex_home=codex_home), force=force)
 
     def import_claude(self, claude_home: Path | None = None, force: bool = False) -> ImportResult:
@@ -57,6 +59,7 @@ class MemoryService:
 
     def import_all(self, force: bool = False, codex_home: Path | None = None) -> ImportResult:
         with self.lock:
+            self._repair_codex_labels()
             result = ImportResult(scanned=0, imported=0, skipped=0, errors=[])
             for adapter in (CodexAdapter(codex_home=codex_home), ClaudeAdapter(), VSCodeAdapter()):
                 partial = self._import_adapter(adapter, force=force)
@@ -65,6 +68,20 @@ class MemoryService:
                 result.skipped += partial.skipped
                 result.errors.extend(partial.errors)
             return result
+
+    def _repair_codex_labels(self) -> None:
+        marker = self.paths.state / "codex-client-labels-v1.json"
+        if marker.exists():
+            return
+        corrected = 0
+        for row in self.db.archive_entries():
+            if row["source"] not in CODEX_SOURCES:
+                continue
+            conversation = self.archive.read(Path(row["archive_path"]))
+            if row["source"] != conversation.source:
+                self.db.update_source(row["id"], conversation.source)
+                corrected += 1
+        write_json(marker, {"completed_at": now(), "corrected": corrected})
 
     def _import_adapter(self, adapter: ConversationSourceAdapter, force: bool) -> ImportResult:
         sessions = adapter.scan_sessions()
@@ -139,7 +156,7 @@ class MemoryService:
             return False
         def legacy_identity(value):
             version = value.metadata.get("parser_version", 0)
-            return ((value.source in {"codex", "vscode-codex"} and version < 2) or
+            return ((value.source in CODEX_SOURCES and version < 2) or
                     ("claude" in value.source and version < 5 and
                      "/subagents/" in value.metadata.get("source_path", "")))
         def revision_key(value):

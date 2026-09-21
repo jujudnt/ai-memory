@@ -8,6 +8,7 @@ from pathlib import Path
 
 from aimemory.models import NormalizedConversation
 from aimemory.state import atomic_write
+from aimemory.sources import CODEX_SOURCES, codex_source
 
 try:
     import zstandard as zstd
@@ -67,7 +68,10 @@ class JsonArchive:
         else:
             with gzip.open(path, "rb") as handle:
                 raw = handle.read()
-        return NormalizedConversation.from_dict(json.loads(raw.decode("utf-8")))
+        conversation = NormalizedConversation.from_dict(json.loads(raw.decode("utf-8")))
+        if conversation.source in CODEX_SOURCES:
+            conversation.source = codex_source(conversation.metadata.get("session_metadata") or {})
+        return conversation
 
     def iter_archives(self) -> list[Path]:
         root = self.archive_root / "sources"
