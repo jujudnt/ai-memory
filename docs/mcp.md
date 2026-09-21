@@ -11,6 +11,13 @@ If you installed AI Memory from GitHub Releases, use the UI:
 3. Click **Activer** on **MCP pour Codex et Claude**.
 4. Restart Codex, Claude Desktop, and VS Code if you use them.
 
+The app first copies its standalone CLI helper to a stable user location:
+
+- macOS/Linux: `~/.ai-memory/bin/ai-memory-cli`
+- Windows: `%LOCALAPPDATA%\AI Memory\bin\ai-memory-cli.exe`
+
+Every MCP client points to that copy instead of `AI Memory.app` or the downloaded executable. The desktop application can therefore be installed, moved, or launched from any folder without invalidating MCP. Enabling the collector uses the same stable runtime for its background watcher.
+
 The app installs only the clients it can detect on the current computer:
 
 - Codex: `~/.codex/config.toml`

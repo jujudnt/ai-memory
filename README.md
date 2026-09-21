@@ -32,7 +32,7 @@ Les conversations Claude Web, Cowork et Design qui ne sont pas présentes dans l
 
 1. Téléchargez la dernière version depuis [GitHub Releases](https://github.com/jujudnt/ai-memory/releases/latest).
 2. Décompressez le fichier correspondant à votre système.
-3. Sur macOS, déplacez `AI Memory.app` dans le dossier **Applications** avant d'activer la collecte ou le MCP.
+3. Sur macOS, vous pouvez placer `AI Memory.app` où vous le souhaitez. Le dossier **Applications** reste recommandé pour l'organisation, mais il n'est pas obligatoire.
 4. Ouvrez AI Memory.
 
 La version macOS est signée avec un certificat Apple Developer ID et notarialisée par Apple.
@@ -42,6 +42,8 @@ La version macOS est signée avec un certificat Apple Developer ID et notarialis
 Dans l'écran principal, cliquez sur **Activer** à côté de **Collecte en continu**.
 
 AI Memory effectue alors un premier import de l'historique déjà présent sur l'ordinateur. Il ne collecte donc pas uniquement les nouvelles conversations. Ensuite, le watcher vérifie régulièrement les changements, même lorsque le tableau de bord est fermé.
+
+Lors de l'activation, AI Memory installe son exécutable de fond dans `~/.ai-memory/bin/ai-memory-cli`. Le watcher ne dépend donc plus de l'emplacement de `AI Memory.app` : l'application peut être déplacée ou supprimée après l'installation sans casser la collecte.
 
 Sur macOS, l'icône AI Memory dans la barre des menus indique son état :
 
@@ -97,7 +99,9 @@ Le bouton installe automatiquement AI Memory dans tous les clients détectés su
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` sur macOS |
 | VS Code | fichier utilisateur `mcp.json` |
 
-L'installation dans un client n'installe pas automatiquement le MCP dans les autres : le bouton AI Memory configure en une fois tous ceux qui sont présents. Si vous installez plus tard un nouveau client, cliquez de nouveau sur **Activer**.
+Les trois configurations pointent vers la copie autonome `~/.ai-memory/bin/ai-memory-cli`, jamais vers l'emplacement de l'application. Vous pouvez donc déplacer AI Memory après l'activation. Sous Windows, cette copie est placée dans `%LOCALAPPDATA%\AI Memory\bin`.
+
+L'installation dans un client n'installe pas automatiquement le MCP dans les autres : le bouton AI Memory configure en une fois tous ceux qui sont présents. Si vous installez plus tard un nouveau client, cliquez de nouveau sur **Activer**. Après une mise à jour depuis une version antérieure à `0.4.13`, cliquez également une fois sur **Activer** pour migrer l'ancienne configuration.
 
 #### Vérifier que le MCP est connecté
 
@@ -247,6 +251,7 @@ export AI_MEMORY_HOME=/chemin/vers/ai-memory
 | `db/memory.sqlite` | Métadonnées et index plein texte FTS5 |
 | `cache/incoming` | Zone temporaire de vérification des téléchargements |
 | `credentials` | Autorisations cloud locales |
+| `bin/ai-memory-cli` | Runtime autonome utilisé par le watcher et le MCP |
 | `state/watcher-status.json` | Santé et dernier résultat du watcher |
 | `state/audit.json` | Dernier rapport d'intégrité |
 
@@ -314,7 +319,7 @@ Claude Web, Cowork, and Design conversations that are not available in local fil
 
 1. Download the latest version from [GitHub Releases](https://github.com/jujudnt/ai-memory/releases/latest).
 2. Extract the archive for your operating system.
-3. On macOS, move `AI Memory.app` to **Applications** before enabling collection or MCP.
+3. On macOS, `AI Memory.app` can be kept anywhere. **Applications** is still recommended for organization, but it is not required.
 4. Open AI Memory.
 
 The macOS release is signed with an Apple Developer ID certificate and notarized by Apple.
@@ -324,6 +329,8 @@ The macOS release is signed with an Apple Developer ID certificate and notarized
 On the main screen, click **Activer** next to **Collecte en continu**.
 
 AI Memory first imports the history already present on the computer. It does not collect only new conversations. The watcher then checks for changes regularly, even after the dashboard is closed.
+
+When collection is enabled, AI Memory installs its background executable at `~/.ai-memory/bin/ai-memory-cli`. The watcher no longer depends on the location of `AI Memory.app`, so moving or deleting the app after installation does not break collection.
 
 On macOS, the AI Memory menu-bar icon shows its state:
 
@@ -379,7 +386,9 @@ The button configures every supported client detected on that computer:
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS |
 | VS Code | user-level `mcp.json` |
 
-Installing MCP in one client does not install it in the others by itself. The AI Memory button handles all clients currently installed. If you install another client later, click **Activer** again.
+All three configurations point to the standalone copy at `~/.ai-memory/bin/ai-memory-cli`, never to the application location. You can therefore move AI Memory after enabling it. On Windows, the copy is installed under `%LOCALAPPDATA%\AI Memory\bin`.
+
+Installing MCP in one client does not install it in the others by itself. The AI Memory button handles all clients currently installed. If you install another client later, click **Activer** again. After upgrading from a version older than `0.4.13`, also click **Activer** once to migrate the previous configuration.
 
 #### Verify the MCP connection
 
@@ -529,6 +538,7 @@ export AI_MEMORY_HOME=/path/to/ai-memory
 | `db/memory.sqlite` | Metadata and FTS5 full-text index |
 | `cache/incoming` | Temporary download verification area |
 | `credentials` | Local cloud authorization |
+| `bin/ai-memory-cli` | Standalone runtime used by the watcher and MCP |
 | `state/watcher-status.json` | Watcher health and latest result |
 | `state/audit.json` | Latest integrity report |
 

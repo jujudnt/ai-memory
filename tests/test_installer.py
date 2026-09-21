@@ -6,11 +6,13 @@ from aimemory.installer import (
     InstallResult,
     WatcherServiceStatus,
     install_claude_desktop_mcp_config,
+    install_all_mcp_configs,
     install_vscode_mcp_config,
     install_mcp_config,
     install_watcher_service,
     mcp_toml_block,
     mcp_json_server,
+    resolve_aimemory_command,
     resolve_mcp_command,
 )
 from aimemory.service import MemoryService
@@ -75,7 +77,11 @@ def test_install_vscode_mcp_config_writes_user_mcp_json(tmp_path: Path):
 
 
 def test_frozen_mcp_command_reuses_app_executable():
-    with patch("sys.frozen", True, create=True), patch("sys.executable", "/tmp/AI Memory"):
+    with (
+        patch("sys.frozen", True, create=True),
+        patch("sys.executable", "/tmp/AI Memory"),
+        patch("aimemory.installer._installed_cli_helper", return_value=Path("/missing/ai-memory-cli")),
+    ):
         command, args = resolve_mcp_command()
 
     assert Path(command) == Path("/tmp/AI Memory")
@@ -89,11 +95,59 @@ def test_frozen_mcp_command_prefers_bundled_helper(tmp_path: Path):
     app_binary.write_text("", encoding="utf-8")
     helper.write_text("", encoding="utf-8")
 
-    with patch("sys.frozen", True, create=True), patch("sys.executable", str(app_binary)):
+    installed = tmp_path / "missing" / "ai-memory-cli"
+    with (
+        patch("sys.frozen", True, create=True),
+        patch("sys.executable", str(app_binary)),
+        patch("aimemory.installer._installed_cli_helper", return_value=installed),
+    ):
         command, args = resolve_mcp_command()
 
     assert command == str(helper)
     assert args == ["mcp-server"]
+
+
+def test_frozen_commands_prefer_installed_runtime_after_app_moves(tmp_path: Path):
+    installed = tmp_path / ".ai-memory" / "bin" / "ai-memory-cli"
+    installed.parent.mkdir(parents=True)
+    installed.write_bytes(b"standalone")
+
+    with (
+        patch("sys.frozen", True, create=True),
+        patch("sys.executable", "/Volumes/Anywhere/AI Memory.app/Contents/MacOS/AI Memory"),
+        patch("aimemory.installer._installed_cli_helper", return_value=installed),
+    ):
+        watcher_command = resolve_aimemory_command()
+        mcp_command, mcp_args = resolve_mcp_command()
+
+    assert watcher_command == [str(installed)]
+    assert mcp_command == str(installed)
+    assert mcp_args == ["mcp-server"]
+
+
+def test_install_all_mcp_configs_copies_frozen_runtime_to_stable_path(tmp_path: Path, monkeypatch):
+    app_binary = tmp_path / "Downloads" / "AI Memory.app" / "Contents" / "MacOS" / "AI Memory"
+    helper = app_binary.with_name("ai-memory-cli")
+    installed = tmp_path / ".ai-memory" / "bin" / "ai-memory-cli"
+    helper.parent.mkdir(parents=True)
+    app_binary.write_bytes(b"desktop")
+    helper.write_bytes(b"standalone-mcp")
+    codex_config = tmp_path / ".codex" / "config.toml"
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    with (
+        patch("sys.frozen", True, create=True),
+        patch("sys.executable", str(app_binary)),
+        patch("aimemory.installer._installed_cli_helper", return_value=installed),
+        patch("aimemory.installer.claude_desktop_available", return_value=False),
+        patch("aimemory.installer.vscode_user_mcp_config_path", return_value=None),
+    ):
+        result = install_all_mcp_configs()
+
+    assert result.changed is True
+    assert installed.read_bytes() == b"standalone-mcp"
+    assert installed.stat().st_mode & 0o111
+    assert str(installed) in codex_config.read_text(encoding="utf-8")
 
 
 def test_install_watcher_short_circuits_when_already_running():

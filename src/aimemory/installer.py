@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import json
+import filecmp
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,7 +35,8 @@ class WatcherServiceStatus:
 
 def resolve_aimemory_command() -> list[str]:
     if getattr(sys, "frozen", False):
-        return [str(_bundled_cli_helper() or Path(sys.executable))]
+        installed = _installed_cli_helper()
+        return [str(installed if installed.exists() else (_bundled_cli_helper() or Path(sys.executable)))]
     executable = shutil.which("aimemory")
     if executable:
         return [executable]
@@ -43,7 +45,8 @@ def resolve_aimemory_command() -> list[str]:
 
 def resolve_mcp_command() -> tuple[str, list[str]]:
     if getattr(sys, "frozen", False):
-        return str(_bundled_cli_helper() or Path(sys.executable)), ["mcp-server"]
+        installed = _installed_cli_helper()
+        return str(installed if installed.exists() else (_bundled_cli_helper() or Path(sys.executable))), ["mcp-server"]
     executable = shutil.which("aimemory-mcp")
     if executable:
         return executable, []
@@ -77,13 +80,14 @@ def install_all_mcp_configs(
     server_name: str = MCP_SERVER_NAME,
     ai_memory_home: Path | None = None,
 ) -> InstallResult:
+    runtime_changed = _install_cli_runtime()
     results = [("Codex", install_mcp_config(server_name, ai_memory_home=ai_memory_home))]
     if claude_desktop_available():
         results.append(("Claude Desktop", install_claude_desktop_mcp_config(server_name, ai_memory_home=ai_memory_home)))
     vscode_path = vscode_user_mcp_config_path()
     if vscode_path:
         results.append(("VS Code", install_vscode_mcp_config(server_name, vscode_path, ai_memory_home)))
-    changed = any(result.changed for _, result in results)
+    changed = runtime_changed or any(result.changed for _, result in results)
     clients = ", ".join(name for name, _ in results)
     message = (
         f"MCP config installed for {clients}."
@@ -240,9 +244,10 @@ def _read_json_object(path: Path) -> dict:
 
 
 def install_watcher_service(interval_seconds: float = 10.0) -> InstallResult:
+    runtime_changed = _install_cli_runtime()
     status = get_watcher_service_status()
     expected_command = [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)]
-    if status.installed and status.running and (
+    if not runtime_changed and status.installed and status.running and (
         status.command is None or status.command == expected_command
     ):
         return InstallResult(False, "Watcher is already installed and running.", status.path)
@@ -427,3 +432,30 @@ def _bundled_cli_helper() -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def _installed_cli_helper() -> Path:
+    if platform.system().lower() == "windows":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        return base / "AI Memory" / "bin" / "ai-memory-cli.exe"
+    return Path.home() / ".ai-memory" / "bin" / "ai-memory-cli"
+
+
+def _install_cli_runtime() -> bool:
+    if not getattr(sys, "frozen", False):
+        return False
+    source = _bundled_cli_helper() or Path(sys.executable)
+    destination = _installed_cli_helper()
+    try:
+        if source.resolve() == destination.resolve():
+            return False
+    except OSError:
+        pass
+    if destination.exists() and filecmp.cmp(source, destination, shallow=False):
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+    shutil.copy2(source, temporary)
+    temporary.chmod(0o755)
+    os.replace(temporary, destination)
+    return True
