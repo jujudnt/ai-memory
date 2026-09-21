@@ -101,7 +101,7 @@ Le bouton installe automatiquement AI Memory dans tous les clients détectés su
 
 Les trois configurations pointent vers la copie autonome `~/.ai-memory/bin/ai-memory-cli`, jamais vers l'emplacement de l'application. Vous pouvez donc déplacer AI Memory après l'activation. Sous Windows, cette copie est placée dans `%LOCALAPPDATA%\AI Memory\bin`.
 
-L'installation dans un client n'installe pas automatiquement le MCP dans les autres : le bouton AI Memory configure en une fois tous ceux qui sont présents. Si vous installez plus tard un nouveau client, cliquez de nouveau sur **Activer**. Après une mise à jour depuis une version antérieure à `0.4.13`, cliquez également une fois sur **Activer** pour migrer l'ancienne configuration.
+L'installation dans un client n'installe pas automatiquement le MCP dans les autres : le bouton AI Memory configure en une fois tous ceux qui sont présents. Si vous installez plus tard un nouveau client, cliquez de nouveau sur **Activer**. 
 
 #### Vérifier que le MCP est connecté
 
@@ -121,8 +121,6 @@ Utilise AI Memory pour retrouver la conversation où nous avons configuré iClou
 Cherche dans AI Memory mes derniers échanges concernant le projet Sabai et résume les décisions.
 ```
 
-```text
-Liste mes conversations Claude et Codex liées à ce dossier.
 ```
 
 ```text
