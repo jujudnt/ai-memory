@@ -60,8 +60,26 @@ w.render({...base, sync_paused:true, sync:{status:'paused'}});
 assert.match(el('cloud-detail').textContent, /suspendus/);
 w.render({...base, sync:{status:'synced', confirmation:'local_folder'}});
 assert.match(el('cloud-detail').textContent, /Copie locale/);
+w.render({...base, sync_active:true, sync:{status:'downloading', transfers:0, totalTransfers:12, confirmedBefore:166}});
+assert.match(el('cloud-detail').textContent, /166 d.*j.* confirm/);
 assert.equal(w.sourceName('codex-desktop'), 'Codex Desktop');
 assert.equal(w.sourceName('vscode-codex'), 'Codex VS Code');
 assert.equal(w.sourceName('codex'), 'Codex');
-dom.window.close();
-console.log('Desktop auth transitions and folder editing passed');
+
+void (async () => {
+  w.fetch = async () => { throw new Error('temporary timeout'); };
+  await w.refresh();
+  await w.refresh();
+  assert.notEqual(el('health-label').textContent, 'Interface déconnectée');
+  await w.refresh();
+  assert.equal(el('health-label').textContent, 'Interface déconnectée');
+  w.fetch = async () => ({ok:true, json:async () => ({...base, sync:{status:'synced'}})});
+  await w.refresh();
+  assert.equal(el('health-label').textContent, 'Collecte en continu');
+  assert.equal(el('message').hidden, true);
+  dom.window.close();
+  console.log('Desktop auth transitions and folder editing passed');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

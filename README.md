@@ -66,7 +66,7 @@ Cliquez sur **Connecter**, puis choisissez une destination :
 
 Après la connexion, ouvrez **Réglages > Dossier de sauvegarde** pour voir le chemin exact ou choisir un autre dossier dans le drive.
 
-La première sauvegarde peut être longue. L'interface affiche la progression, la dernière activité, les erreurs éventuelles et l'espace local récupéré. Les transferts interrompus reprennent en ignorant les objets déjà confirmés dans le cloud.
+La première sauvegarde peut être longue. L'interface affiche la progression, la dernière activité, les erreurs éventuelles et l'espace local récupéré. Les transferts interrompus reprennent en ignorant les objets déjà confirmés dans le cloud. Le compteur repart pour chaque cycle, mais affiche aussi le nombre d'objets déjà confirmés : repartir de `0` sur un total restant ne signifie pas retélécharger l'historique.
 
 **Synchroniser signifie envoyer ET recevoir.** « Envoi » sauvegarde les données de ce Mac ; « Réception » récupère celles de la destination, notamment de l'autre ordinateur. Le compteur indique des objets (versions et originaux), pas un nombre de conversations. Le bouton pause suspend les transferts ; la flèche de synchronisation permet de reprendre.
 
@@ -188,6 +188,7 @@ Les transferts sont adressés par le hash du contenu : relancer une synchronisat
 | Les anciennes conversations manquent | Laissez finir le premier import et vérifiez l'état du watcher dans l'icône de menu. |
 | Le cloud est plein | Libérez de l'espace ou utilisez **Changer de destination**. |
 | iCloud affiche `Resource deadlock avoided` | Ouvrez le dossier dans Finder, forcez son téléchargement et laissez le watcher réessayer. |
+| L'interface affiche brièvement une connexion perdue pendant une réception | Les transferts continuent dans le watcher. Depuis `0.4.23`, l'interface attend trois échecs et se reconnecte automatiquement sur le même port. |
 | La connexion Google cesse de fonctionner | Configurez votre propre client OAuth Desktop selon la [documentation rclone](https://rclone.org/drive/#making-your-own-client-id). |
 
 ## Guide développeur
@@ -378,7 +379,7 @@ Click **Connecter**, then choose a destination:
 
 After connecting, open **Réglages > Dossier de sauvegarde** to see the exact path or choose another folder inside the drive.
 
-The first backup may take a while. The UI shows progress, recent activity, errors, and reclaimed local space. Interrupted transfers resume by skipping objects already confirmed in the cloud.
+The first backup may take a while. The UI shows progress, recent activity, errors, and reclaimed local space. Interrupted transfers resume by skipping objects already confirmed in the cloud. The counter restarts for each cycle but also reports previously confirmed objects: `0` on a smaller remaining total does not mean the whole history is downloaded again.
 
 **Synchronization sends AND receives.** Upload saves this computer's data; download retrieves data from the destination, including another computer's archives. Counters show objects (revisions and originals), not conversations. Pause suspends transfers; the synchronization arrow resumes them.
 
@@ -500,6 +501,7 @@ Transfers are content-addressed: restarting synchronization does not create anot
 | Older conversations are missing | Let the first import complete and inspect the watcher state from the menu-bar icon. |
 | Cloud storage is full | Free space or use **Changer de destination**. |
 | iCloud reports `Resource deadlock avoided` | Open the folder in Finder, force its download, and let the watcher retry. |
+| The UI briefly reports a lost connection during reception | Transfers continue in the watcher. Since `0.4.23`, the UI waits for three failures and reconnects automatically on the same port. |
 | Google authentication stops working | Configure your own Desktop OAuth client using the [rclone documentation](https://rclone.org/drive/#making-your-own-client-id). |
 
 ## Developer guide

@@ -166,24 +166,38 @@ def test_icloud_partial_raw_chain_waits_instead_of_reporting_checksum_error(tmp_
 
 def test_cloud_read_retries_busy_but_does_not_hide_permission_errors(tmp_path, monkeypatch):
     source = tmp_path / "snapshot"
-    original = Path.read_bytes
+    from aimemory.sync import cloud_sync
+    original = cloud_sync._stream_copy_atomic
     calls = []
     source.write_bytes(b"downloaded")
-    def read(path):
-        if path == source:
-            calls.append(path)
-            if len(calls) == 1:
-                raise OSError(errno.EAGAIN, "Resource deadlock avoided")
-        return original(path)
-    monkeypatch.setattr(Path, "read_bytes", read)
+    def copy(input_path, output_path):
+        calls.append(input_path)
+        if len(calls) == 1:
+            raise OSError(errno.EAGAIN, "Resource deadlock avoided")
+        return original(input_path, output_path)
+    monkeypatch.setattr(cloud_sync, "_stream_copy_atomic", copy)
     monkeypatch.setattr("aimemory.sync.cloud_sync.time.sleep", lambda _: None)
     remote = LocalArchiveRemote(tmp_path)
     remote.download("snapshot", tmp_path / "incoming/copy")
     assert (tmp_path / "incoming/copy").read_bytes() == b"downloaded"
+    assert calls == [source, source]
     def denied():
         raise PermissionError(errno.EACCES, "Permission denied")
     with pytest.raises(PermissionError):
         remote._io(denied, source)
+
+
+def test_local_cloud_copy_streams_and_replaces_atomically(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    target = tmp_path / "nested" / "target"
+    source.write_bytes(b"chunk" * 1024 * 1024)
+    monkeypatch.setattr(Path, "read_bytes", lambda *_: pytest.fail("copy must be streamed"))
+    from aimemory.sync.cloud_sync import _stream_copy_atomic
+    _stream_copy_atomic(source, target)
+    with target.open("rb") as stream:
+        assert stream.read(10) == b"chunkchunk"
+    assert target.stat().st_size == source.stat().st_size
+    assert not list(target.parent.glob(".*.partial"))
 
 
 @pytest.mark.parametrize("code", [errno.EDEADLK, errno.EAGAIN, errno.EBUSY])

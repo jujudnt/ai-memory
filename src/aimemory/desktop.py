@@ -44,6 +44,11 @@ ASSETS = Path(__file__).with_name("assets")
 HTML = (ASSETS / "desktop.html").read_text(encoding="utf-8")
 
 
+class DesktopHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 class DesktopState:
     def __init__(self):
         self.service = MemoryService()
@@ -459,7 +464,7 @@ def main(background: bool = False) -> int:
         if not background:
             open_existing(state_path)
         return 0
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = _create_desktop_server(state_path)
     url = f"http://127.0.0.1:{server.server_port}"
     write_json(state_path / "desktop.json", {"port": server.server_port})
     worker = threading.Thread(target=server.serve_forever, daemon=True)
@@ -479,9 +484,21 @@ def main(background: bool = False) -> int:
     finally:
         server.shutdown()
         server.server_close()
-        (state_path / "desktop.json").unlink(missing_ok=True)
         lock.release()
     return 0
+
+
+def _create_desktop_server(state_path: Path) -> DesktopHTTPServer:
+    """Reuse the previous port so existing browser tabs survive an app restart."""
+    saved = read_json(state_path / "desktop.json").get("port")
+    ports = [saved, 0] if isinstance(saved, int) and 0 < saved < 65536 else [0]
+    for port in ports:
+        try:
+            return DesktopHTTPServer(("127.0.0.1", port), Handler)
+        except OSError:
+            if port == 0:
+                raise
+    raise RuntimeError("Impossible de démarrer l'interface locale AI Memory.")
 
 
 def open_existing(state_path: Path) -> None:

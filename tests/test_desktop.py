@@ -1,5 +1,6 @@
 import json
 import plistlib
+import socket
 import threading
 from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
@@ -9,7 +10,8 @@ from pathlib import Path
 import pytest
 from filelock import FileLock
 
-from aimemory.desktop import DesktopState, Handler, codex_mcp_configured, mcp_configured
+from aimemory.desktop import DesktopState, Handler, _create_desktop_server, codex_mcp_configured, mcp_configured
+from aimemory.state import write_json
 from aimemory.health import watcher_health
 from aimemory.installer import WatcherServiceStatus
 from aimemory.menubar import ensure_login, login_path, set_login_enabled
@@ -58,6 +60,33 @@ def test_development_does_not_register_login(tmp_path, monkeypatch):
     monkeypatch.delattr("sys.frozen", raising=False)
     ensure_login(tmp_path / "state")
     assert not login_path().exists()
+
+
+def test_desktop_reuses_previous_port_and_falls_back_when_busy(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    write_json(state / "desktop.json", {"port": port})
+    server = _create_desktop_server(state)
+    try:
+        assert server.server_port == port
+    finally:
+        server.server_close()
+
+    occupied = socket.socket()
+    occupied.bind(("127.0.0.1", port))
+    occupied.listen()
+    try:
+        server = _create_desktop_server(state)
+        try:
+            assert server.server_port != port
+        finally:
+            server.server_close()
+    finally:
+        occupied.close()
 
 
 def test_codex_mcp_status_does_not_claim_a_disabled_server_is_ready(tmp_path, monkeypatch):

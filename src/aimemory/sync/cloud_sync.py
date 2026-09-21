@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import threading
+import uuid
 from pathlib import Path
 from filelock import FileLock
 
@@ -49,7 +50,8 @@ class CloudSync:
             status = read_json(self.status_path)
             status.update(status="preparing", started_at=now(), error=None, message=None,
                           error_category=None, retry_after=None, requires_action=False,
-                          transfers=0, totalTransfers=0, bytes=0, totalBytes=0, speed=0)
+                          transfers=0, totalTransfers=0, confirmedBefore=0,
+                          bytes=0, totalBytes=0, speed=0)
             status_lock = threading.RLock()
             last_beat = [0.0]
             def progress(phase, **details):
@@ -161,12 +163,14 @@ class CloudSync:
                      if path not in known or (pull_only and not (self.paths.archive / path).is_file())),
                     key=lambda path: (not path.startswith("snapshots/"), path),
                 )
+                confirmed_before = len(known)
                 for index, relative_string in enumerate(downloads, start=1):
                     check_cancelled(self.paths)
                     relative = Path(relative_string)
                     if not _allowed_object(relative_string):
                         raise ValueError("Unexpected object in cloud archive")
-                    progress("downloading", object_count=len(known), transfers=index - 1, totalTransfers=len(downloads))
+                    progress("downloading", object_count=len(known), transfers=index - 1,
+                             totalTransfers=len(downloads), confirmedBefore=confirmed_before)
                     if hasattr(remote, "download_many") and not ((self.paths.archive if relative.parts[0] == "raw" else incoming) / relative).is_file():
                         batch = [item for item in downloads[index - 1:index + 19]
                                  if item.startswith(relative.parts[0] + "/")]
@@ -215,7 +219,8 @@ class CloudSync:
                         os.replace(path, target)
                     known[relative_string] = True
                     checkpoint()
-                    progress("downloading", object_count=len(known), transfers=index, totalTransfers=len(downloads))
+                    progress("downloading", object_count=len(known), transfers=index,
+                             totalTransfers=len(downloads), confirmedBefore=confirmed_before)
                     if len(known) % 10 == 0:
                         progress("verifying", object_count=len(known))
                 for relative_string, _ in local_objects:
@@ -631,17 +636,16 @@ class LocalArchiveRemote:
         target = self.root / relative
         def copy():
             if not target.exists():
-                atomic_write(target, local_path.read_bytes())
+                _stream_copy_atomic(local_path, target)
         self._io(copy, target)
 
     def download(self, relative: str, local_path: Path) -> None:
         source = self.root / relative
         try:
-            payload = self._io(source.read_bytes, source)
+            self._io(lambda: _stream_copy_atomic(source, local_path), source)
         except FileNotFoundError:
             _wait_for_incomplete_icloud_item(self, relative)
             raise
-        atomic_write(local_path, payload)
 
     def delete_many(self, relatives: set[str]) -> None:
         for relative in sorted(relatives):
@@ -677,6 +681,20 @@ def _request_icloud_download(path: Path) -> None:
     except Exception:
         # Finder can still download the item if the native request is unavailable.
         pass
+
+
+def _stream_copy_atomic(source: Path, target: Path) -> None:
+    """Copy large cloud objects without holding their full contents in RAM."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.partial")
+    try:
+        with source.open("rb") as incoming, temporary.open("xb") as outgoing:
+            shutil.copyfileobj(incoming, outgoing, length=1024 * 1024)
+            outgoing.flush()
+            os.fsync(outgoing.fileno())
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class RcloneArchiveRemote:

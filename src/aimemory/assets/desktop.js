@@ -119,6 +119,8 @@ function notice(message, error = false) {
     el.classList.toggle("error", error);
   }
 }
+let refreshFailures = 0;
+let connectionNotice = false;
 function busy() {
   const locked = requestBusy || !!current?.job?.running;
   document.querySelectorAll("[data-action]").forEach((button) => {
@@ -248,7 +250,8 @@ function render(data) {
     cloudText += ` \u00b7 ${elapsed(sync.last_success_at)}`;
   else if (configured && data.sync_active) {
     if (sync.totalTransfers > 0)
-      cloudText += ` \u00b7 ${sync.transfers || 0} / ${sync.totalTransfers} objets uniques`;
+      cloudText += ` \u00b7 ${sync.transfers || 0} / ${sync.totalTransfers} objets ce cycle` +
+        (sync.confirmedBefore > 0 ? ` \u00b7 ${sync.confirmedBefore} d\u00e9j\u00e0 confirm\u00e9s` : "");
     else if (sync.totalBytes > 0)
       cloudText += ` \u00b7 ${size(sync.bytes)} / ${size(sync.totalBytes)} \u00b7 ${size(sync.speed)}/s`;
   }
@@ -395,14 +398,24 @@ async function refresh() {
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) throw new Error("Lecture impossible");
-    render(await res.json());
+    const data = await res.json();
+    refreshFailures = 0;
+    if (connectionNotice) {
+      notice("");
+      connectionNotice = false;
+    }
+    render(data);
   } catch (error) {
-    $("#health-badge").dataset.state = "error";
-    $("#health-label").textContent = "Interface d\u00e9connect\u00e9e";
-    notice(
-      "Connexion locale perdue. Rouvrez AI Memory depuis la barre de menus.",
-      true,
-    );
+    refreshFailures += 1;
+    if (refreshFailures >= 3) {
+      $("#health-badge").dataset.state = "error";
+      $("#health-label").textContent = "Interface d\u00e9connect\u00e9e";
+      connectionNotice = true;
+      notice(
+        "Connexion locale perdue. AI Memory tente de se reconnecter automatiquement.",
+        true,
+      );
+    }
   }
 }
 async function action(name, body = {}) {
