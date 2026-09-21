@@ -15,9 +15,16 @@ from aimemory.state import write_json
 
 def rclone_binary() -> str:
     name = "rclone.exe" if os.name == "nt" else "rclone"
-    candidates = [Path(sys.executable).with_name(name),
-                  Path(getattr(sys, "_MEIPASS", ".")) / name,
-                  Path(__file__).resolve().parents[3] / "vendor" / name]
+    if os.name == "nt":
+        runtime_home = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "AI Memory"
+    else:
+        runtime_home = Path.home() / ".ai-memory"
+    candidates = [
+        Path(sys.executable).with_name(name),
+        runtime_home / "bin" / name,
+        Path(getattr(sys, "_MEIPASS", ".")) / name,
+        Path(__file__).resolve().parents[3] / "vendor" / name,
+    ]
     for candidate in candidates:
         if candidate.is_file():
             return str(candidate.resolve())

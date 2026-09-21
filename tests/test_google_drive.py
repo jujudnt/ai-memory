@@ -3,6 +3,7 @@ import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -61,6 +62,27 @@ def test_real_rclone_exchange_reports_progress(tmp_path):
     assert (remote / "a.txt").read_text() == "local file"
     assert {phase for phase, stats in phases} == {"uploading", "downloading"}
     assert any(stats.get("bytes", 0) > 0 for phase, stats in phases)
+
+
+def test_rclone_binary_finds_stable_runtime_after_app_moves(tmp_path, monkeypatch):
+    name = "rclone.exe" if os.name == "nt" else "rclone"
+    runtime = (
+        tmp_path / "AI Memory" / "bin" / name
+        if os.name == "nt"
+        else tmp_path / ".ai-memory" / "bin" / name
+    )
+    runtime.parent.mkdir(parents=True)
+    runtime.write_bytes(b"cloud-runtime")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+    with (
+        patch("sys.executable", str(tmp_path / "missing" / "AI Memory")),
+        patch("sys._MEIPASS", str(tmp_path / "missing"), create=True),
+        patch("shutil.which", return_value=None),
+    ):
+        assert rclone_binary() == str(runtime.resolve())
 
 
 def test_google_quota_errors_are_actionable():

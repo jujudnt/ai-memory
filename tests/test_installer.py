@@ -130,10 +130,12 @@ def test_frozen_commands_prefer_installed_runtime_after_app_moves(tmp_path: Path
 def test_install_all_mcp_configs_copies_frozen_runtime_to_stable_path(tmp_path: Path, monkeypatch):
     app_binary = tmp_path / "Downloads" / "AI Memory.app" / "Contents" / "MacOS" / "AI Memory"
     helper = app_binary.with_name("ai-memory-cli")
+    bundled_rclone = app_binary.with_name("rclone.exe" if os.name == "nt" else "rclone")
     installed = tmp_path / ".ai-memory" / "bin" / "ai-memory-cli"
     helper.parent.mkdir(parents=True)
     app_binary.write_bytes(b"desktop")
     helper.write_bytes(b"standalone-mcp")
+    bundled_rclone.write_bytes(b"standalone-cloud")
     codex_config = tmp_path / ".codex" / "config.toml"
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -149,6 +151,7 @@ def test_install_all_mcp_configs_copies_frozen_runtime_to_stable_path(tmp_path: 
 
     assert result.changed is True
     assert installed.read_bytes() == b"standalone-mcp"
+    assert installed.with_name(bundled_rclone.name).read_bytes() == b"standalone-cloud"
     if os.name != "nt":
         assert installed.stat().st_mode & 0o111
     config = tomllib.loads(codex_config.read_text(encoding="utf-8"))

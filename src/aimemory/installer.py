@@ -446,6 +446,22 @@ def _install_cli_runtime() -> bool:
         return False
     source = _bundled_cli_helper() or Path(sys.executable)
     destination = _installed_cli_helper()
+    changed = _copy_runtime_file(source, destination)
+
+    rclone_name = "rclone.exe" if os.name == "nt" else "rclone"
+    rclone_candidates = [
+        source.with_name(rclone_name),
+        Path(sys.executable).with_name(rclone_name),
+        Path(getattr(sys, "_MEIPASS", ".")) / rclone_name,
+    ]
+    for rclone_source in rclone_candidates:
+        if rclone_source.is_file():
+            changed = _copy_runtime_file(rclone_source, destination.with_name(rclone_name)) or changed
+            break
+    return changed
+
+
+def _copy_runtime_file(source: Path, destination: Path) -> bool:
     try:
         if source.resolve() == destination.resolve():
             return False
