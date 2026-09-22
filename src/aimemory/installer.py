@@ -12,6 +12,7 @@ import filecmp
 from dataclasses import dataclass
 from pathlib import Path
 from aimemory.state import atomic_write
+from aimemory.processes import background_creationflags
 
 
 MCP_SERVER_NAME = "ai-memory"
@@ -368,10 +369,13 @@ def _install_windows_task(interval_seconds: float) -> InstallResult:
         text=True,
         capture_output=True,
         check=False,
+        creationflags=background_creationflags(),
+        timeout=30,
     )
     if result.returncode != 0:
         return InstallResult(False, result.stderr.strip() or result.stdout.strip())
-    subprocess.run(["schtasks", "/Run", "/TN", "AI Memory Watcher"], check=True, capture_output=True)
+    subprocess.run(["schtasks", "/Run", "/TN", "AI Memory Watcher"], check=True, capture_output=True,
+                   creationflags=background_creationflags(), timeout=30)
     return InstallResult(True, "Watcher scheduled task installed.", "AI Memory Watcher")
 
 
@@ -381,6 +385,8 @@ def _windows_task_status() -> WatcherServiceStatus:
         text=True,
         capture_output=True,
         check=False,
+        creationflags=background_creationflags(),
+        timeout=10,
     )
     if result.returncode != 0:
         return WatcherServiceStatus(False, False, "AI Memory Watcher", (result.stderr or result.stdout).strip())
@@ -494,7 +500,7 @@ def _install_cli_runtime() -> bool:
 def _validate_cli_runtime(executable: Path) -> None:
     try:
         result = subprocess.run([str(executable), "--help"], capture_output=True, timeout=30,
-                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                                creationflags=background_creationflags())
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("Le composant AI Memory ne démarre pas. L'installation existante est conservée.") from exc
     if result.returncode:

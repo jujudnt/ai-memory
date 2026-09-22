@@ -227,7 +227,7 @@ function render(data) {
     ? "Icône dans la zone de notification"
     : "Icône dans la barre de menus";
   $("#status-icon-help").textContent = "Lancement à l'ouverture de session";
-  $(".local-label").lastChild.textContent = data.menubar_available
+  $(".local-label").lastChild.textContent = data.menubar_available && data.status_icon_platform === "mac"
     ? " Sur votre Mac"
     : " Sur cet ordinateur";
   const provider =

@@ -38,6 +38,7 @@ from aimemory.cloud.destination import cloud_folder, remote_path
 from aimemory.sync.cloud_sync import cancel_active_sync, clear_cancel
 from aimemory.state import read_json, write_json
 from aimemory.health import watcher_health
+from aimemory.processes import background_creationflags
 
 
 ASSETS = Path(__file__).with_name("assets")
@@ -304,7 +305,13 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return
             command = [*resolve_aimemory_command(), "watch", "--interval", "10"]
-            self.state.watcher_process = subprocess.Popen(command)
+            logs = self.state.service.paths.home / "logs"
+            logs.mkdir(parents=True, exist_ok=True)
+            with (logs / "watcher.out.log").open("ab") as out, (logs / "watcher.err.log").open("ab") as err:
+                self.state.watcher_process = subprocess.Popen(
+                    command, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                    creationflags=background_creationflags(),
+                )
             self._send_json({"message": "Watcher started for this session.", "command": command})
             return
         if self.path == "/api/install-watcher":

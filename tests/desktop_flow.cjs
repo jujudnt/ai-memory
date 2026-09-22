@@ -65,6 +65,11 @@ assert.match(el('cloud-detail').textContent, /166 d.*j.* confirm/);
 assert.equal(w.sourceName('codex-desktop'), 'Codex Desktop');
 assert.equal(w.sourceName('vscode-codex'), 'Codex VS Code');
 assert.equal(w.sourceName('codex'), 'Codex');
+w.render({...base, menubar_available:true, status_icon_platform:'windows'});
+assert.equal(el('status-icon-label').textContent, 'Icône dans la zone de notification');
+assert.match(w.document.querySelector('.local-label').textContent, /Sur cet ordinateur/);
+w.render({...base, menubar_available:true, status_icon_platform:'mac'});
+assert.match(w.document.querySelector('.local-label').textContent, /Sur votre Mac/);
 
 void (async () => {
   w.fetch = async () => { throw new Error('temporary timeout'); };

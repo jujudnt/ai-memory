@@ -155,6 +155,33 @@ def test_desktop_assets_status_and_request_guards(desktop_server):
     client.close()
 
 
+def test_windows_manual_watcher_is_hidden_and_keeps_logs(desktop_server, monkeypatch):
+    from unittest.mock import Mock
+    import subprocess
+    monkeypatch.setattr("aimemory.desktop.background_creationflags", lambda: 0x08000000)
+    monkeypatch.setattr(Handler.state.service, "watcher_status", lambda: {})
+    process = Mock()
+    process.poll.return_value = None
+    spawn = Mock(return_value=process)
+    monkeypatch.setattr("aimemory.desktop.subprocess.Popen", spawn)
+    client = HTTPConnection("127.0.0.1", desktop_server.server_port)
+    try:
+        for _ in range(2):
+            client.request("POST", "/api/start-watcher", body="{}",
+                           headers={"X-AI-Memory-Token": Handler.state.token})
+            response = client.getresponse()
+            assert response.status == 200, response.read()
+            response.read()
+        spawn.assert_called_once()
+        options = spawn.call_args.kwargs
+        assert options["creationflags"] == 0x08000000
+        assert options["stdin"] == subprocess.DEVNULL
+        assert options["stdout"].closed and options["stderr"].closed
+        assert Path(options["stderr"].name).name == "watcher.err.log"
+    finally:
+        client.close()
+
+
 def test_desktop_assets_explain_multi_client_mcp_and_two_step_icloud():
     html = Path("src/aimemory/assets/desktop.html").read_text(encoding="utf-8")
     script = Path("src/aimemory/assets/desktop.js").read_text(encoding="utf-8")
