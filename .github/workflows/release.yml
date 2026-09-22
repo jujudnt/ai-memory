@@ -88,7 +88,11 @@ jobs:
           python scripts/smoke_packaged.py "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"
       - name: Build Windows app
         if: runner.os == 'Windows'
-        run: pyinstaller --name "AI Memory" --onefile --collect-all mcp --collect-data aimemory --add-binary "vendor/rclone.exe;." --add-data "vendor/rclone-COPYING.txt;." src/aimemory/bootstrap.py
+        shell: pwsh
+        run: |
+          pyinstaller --name ai-memory-cli --onefile --collect-all mcp --collect-data aimemory --add-binary "vendor/rclone.exe;." --add-data "vendor/rclone-COPYING.txt;." src/aimemory/bootstrap.py
+          python scripts/smoke_packaged.py "dist/ai-memory-cli.exe"
+          pyinstaller --name "AI Memory" --onefile --windowed --collect-all mcp --collect-all pystray --collect-data aimemory --add-binary "dist/ai-memory-cli.exe;." --add-binary "vendor/rclone.exe;." --add-data "vendor/rclone-COPYING.txt;." src/aimemory/bootstrap.py
       - name: Package macOS
         if: runner.os == 'macOS'
         run: |

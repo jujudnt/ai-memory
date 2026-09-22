@@ -14,7 +14,7 @@ from aimemory.desktop import DesktopState, Handler, _create_desktop_server, code
 from aimemory.state import write_json
 from aimemory.health import watcher_health
 from aimemory.installer import WatcherServiceStatus
-from aimemory.menubar import ensure_login, login_path, set_login_enabled
+from aimemory.menubar import ensure_login, login_path, set_login_enabled, status_icon_available, _windows_login_command
 
 
 @pytest.mark.parametrize("state,expected", [
@@ -60,6 +60,15 @@ def test_development_does_not_register_login(tmp_path, monkeypatch):
     monkeypatch.delattr("sys.frozen", raising=False)
     ensure_login(tmp_path / "state")
     assert not login_path().exists()
+
+
+def test_windows_status_icon_uses_hidden_desktop_executable(monkeypatch):
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", r"C:\Program Files\AI Memory\AI Memory.exe")
+
+    assert status_icon_available()
+    assert _windows_login_command() == r'"C:\Program Files\AI Memory\AI Memory.exe" --background'
 
 
 def test_desktop_reuses_previous_port_and_falls_back_when_busy(tmp_path):

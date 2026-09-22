@@ -334,7 +334,7 @@ Les secrets GitHub nécessaires à la signature sont décrits dans [docs/release
 
 ### Périmètre actuel
 
-Disponible : import Codex/Claude/VS Code, archives versionnées, recherche FTS5, watcher, synchronisation cloud et dossiers locaux, nettoyage après vérification, interface desktop, barre de menus macOS et MCP local.
+Disponible : import Codex/Claude/VS Code, archives versionnées, recherche FTS5, watcher, synchronisation cloud et dossiers locaux, nettoyage après vérification, interface desktop, icône d'état dans la barre de menus macOS ou la zone de notification Windows, et MCP local. Sous Windows, l'application graphique n'ouvre pas de terminal ; son utilitaire console intégré est réservé au watcher et au MCP.
 
 Non disponible pour le moment : recherche vectorielle, collecte événementielle à la place du polling, adaptateur Cursor dédié, import Claude Web/Cowork/Design sans export local stable, stockage GitHub privé et chiffrement de bout en bout optionnel. Consultez [docs/roadmap.md](docs/roadmap.md).
 
@@ -671,7 +671,7 @@ Required GitHub signing secrets are documented in [docs/release.md](docs/release
 
 ### Current scope
 
-Available today: Codex/Claude/VS Code import, revision archives, FTS5 search, watcher, cloud and local-folder synchronization, verified cleanup, desktop UI, macOS menu-bar status, and local MCP.
+Available today: Codex/Claude/VS Code import, revision archives, FTS5 search, watcher, cloud and local-folder synchronization, verified cleanup, desktop UI, macOS menu-bar or Windows notification-area status, and local MCP. On Windows, the graphical application does not open a terminal; its bundled console helper is reserved for the watcher and MCP.
 
 Not currently available: vector search, filesystem events instead of polling, a dedicated Cursor adapter, Claude Web/Cowork/Design import without a stable local export, private GitHub storage, and optional end-to-end encryption. See [docs/roadmap.md](docs/roadmap.md).
 

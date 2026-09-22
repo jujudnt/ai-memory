@@ -223,6 +223,10 @@ function render(data) {
   $("#mcp-enable").textContent = data.mcp_configured ? "R\u00e9parer" : "Activer";
   $("#menubar-setting").hidden = !data.menubar_available;
   $("#menubar-login").checked = !!data.menubar_login;
+  $("#status-icon-label").textContent = data.status_icon_platform === "windows"
+    ? "Icône dans la zone de notification"
+    : "Icône dans la barre de menus";
+  $("#status-icon-help").textContent = "Lancement à l'ouverture de session";
   $(".local-label").lastChild.textContent = data.menubar_available
     ? " Sur votre Mac"
     : " Sur cet ordinateur";

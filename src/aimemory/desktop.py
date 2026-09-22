@@ -90,9 +90,10 @@ class Handler(BaseHTTPRequestHandler):
             status["health"] = watcher_health(status["watcher"])
             status["mcp_clients"] = mcp_client_status()
             status["mcp_configured"] = mcp_configured(status["mcp_clients"])
-            status["menubar_available"] = sys.platform == "darwin"
-            from aimemory.menubar import login_path
-            status["menubar_login"] = sys.platform == "darwin" and login_path().exists()
+            from aimemory.menubar import login_enabled, status_icon_available
+            status["menubar_available"] = status_icon_available()
+            status["menubar_login"] = login_enabled()
+            status["status_icon_platform"] = "windows" if sys.platform == "win32" else "mac"
             try:
                 with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=0):
                     status["sync_active"] = False
@@ -477,6 +478,11 @@ def main(background: bool = False) -> int:
             from aimemory.menubar import ensure_login, run_menubar
             ensure_login(state_path)
             run_menubar(Handler.state.service, url)
+        elif sys.platform == "win32":
+            from aimemory.menubar import ensure_login
+            from aimemory.windows_tray import run_windows_tray
+            ensure_login(state_path)
+            run_windows_tray(Handler.state.service, url)
         else:
             worker.join()
     except KeyboardInterrupt:

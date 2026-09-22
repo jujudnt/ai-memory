@@ -16,6 +16,7 @@ from aimemory.installer import (
     mcp_json_server,
     resolve_aimemory_command,
     resolve_mcp_command,
+    _bundled_cli_helper,
 )
 from aimemory.service import MemoryService
 
@@ -212,3 +213,14 @@ def test_reinstall_mcp_preserves_windows_path_escaping(tmp_path):
         install_mcp_config(config_path=config)
         install_mcp_config(config_path=config)
     assert tomllib.loads(config.read_text())["mcp_servers"]["ai-memory"]["command"] == command
+
+
+def test_windows_bundle_finds_embedded_console_helper(tmp_path, monkeypatch):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    helper = bundle / "ai-memory-cli.exe"
+    helper.write_bytes(b"console-helper")
+    monkeypatch.setattr("sys.executable", str(tmp_path / "AI Memory.exe"))
+    monkeypatch.setattr("sys._MEIPASS", str(bundle), raising=False)
+
+    assert _bundled_cli_helper() == helper

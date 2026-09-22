@@ -12,15 +12,37 @@ from aimemory.health import watcher_health
 from aimemory.state import read_json, write_json
 
 LOGIN_LABEL = "io.github.jujudnt.ai-memory.menubar"
+WINDOWS_RUN_VALUE = "AI Memory"
 
 
 def login_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LOGIN_LABEL}.plist"
 
 
+def status_icon_available() -> bool:
+    return sys.platform in {"darwin", "win32"}
+
+
+def login_enabled() -> bool:
+    if sys.platform == "darwin":
+        return login_path().exists()
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _windows_run_key()) as key:
+                winreg.QueryValueEx(key, WINDOWS_RUN_VALUE)
+            return True
+        except OSError:
+            return False
+    return False
+
+
 def set_login_enabled(enabled: bool, state_path: Path) -> None:
+    if sys.platform == "win32":
+        _set_windows_login(enabled, state_path)
+        return
     if sys.platform != "darwin":
-        raise ValueError("Menu bar startup is available only on macOS.")
+        raise ValueError("Status icon startup is available only on macOS and Windows.")
     path = login_path()
     if enabled:
         if getattr(sys, "frozen", False):
@@ -48,6 +70,34 @@ def ensure_login(state_path: Path) -> None:
         prefs = read_json(state_path / "desktop-preferences.json")
         if prefs.get("login_enabled", True):
             set_login_enabled(True, state_path)
+
+
+def _windows_run_key() -> str:
+    return r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _windows_login_command() -> str:
+    if getattr(sys, "frozen", False):
+        executable = sys.executable
+        args = "--background"
+    else:
+        executable = sys.executable
+        args = '-m aimemory.desktop --background'
+    return f'"{executable}" {args}'
+
+
+def _set_windows_login(enabled: bool, state_path: Path) -> None:
+    import winreg
+    access = winreg.KEY_SET_VALUE
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _windows_run_key(), 0, access) as key:
+        if enabled:
+            winreg.SetValueEx(key, WINDOWS_RUN_VALUE, 0, winreg.REG_SZ, _windows_login_command())
+        else:
+            try:
+                winreg.DeleteValue(key, WINDOWS_RUN_VALUE)
+            except FileNotFoundError:
+                pass
+    write_json(state_path / "desktop-preferences.json", {"login_enabled": enabled})
 
 
 def run_menubar(service, url: str) -> None:

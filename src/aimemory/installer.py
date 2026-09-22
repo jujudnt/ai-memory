@@ -450,6 +450,12 @@ def _bundled_cli_helper() -> Path | None:
         executable.with_name("ai-memory-cli"),
         executable.with_name("ai-memory-cli.exe"),
     ]
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        candidates.extend([
+            Path(bundle_root) / "ai-memory-cli",
+            Path(bundle_root) / "ai-memory-cli.exe",
+        ])
     # macOS .app bundle: Contents/MacOS/AI Memory -> Contents/MacOS/ai-memory-cli.
     for candidate in candidates:
         if candidate.exists():
