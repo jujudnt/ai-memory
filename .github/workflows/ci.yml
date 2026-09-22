@@ -21,6 +21,9 @@ jobs:
         with:
           node-version: "22"
       - run: python -m pip install -e ".[dev]"
+      - name: Install Windows tray test dependencies
+        if: runner.os == 'Windows'
+        run: python -m pip install -e ".[desktop]"
       - run: npm ci
       - run: pytest -q
       - run: npm test
