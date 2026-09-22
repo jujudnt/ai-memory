@@ -154,12 +154,10 @@ class CloudSync:
                 # Reclaim already verified iCloud copies before receiving more history.
                 # A large or interrupted download must not postpone retention forever.
                 retention = {}
-                if (config["provider"] == "icloud-drive" and not pull_only and not migration
-                        and any(key.startswith("snapshots/") for key in known)):
+                if config["provider"] == "icloud-drive" and known and not pull_only and not migration:
                     with self.service.lock.acquire(timeout=60):
                         retention = prune_synced_local_copies(
-                            self.paths, {key: value for key, value in known.items() if key.startswith("snapshots/")},
-                            confirm_copy=remote.confirm_uploaded_copy,
+                            self.paths, known, confirm_copy=remote.confirm_uploaded_copy,
                             heartbeat=heartbeat,
                         )
                 if remote_redundant and not pull_only:
@@ -184,20 +182,32 @@ class CloudSync:
                         raise ValueError("Unexpected object in cloud archive")
                     progress("downloading", object_count=len(known), transfers=index - 1,
                              totalTransfers=len(downloads), confirmedBefore=confirmed_before)
-                    if hasattr(remote, "download_many") and not ((self.paths.archive if relative.parts[0] == "raw" else incoming) / relative).is_file():
+                    archived = self.paths.archive / relative
+                    # A content-addressed local snapshot can be verified directly;
+                    # do not hydrate a second copy from iCloud just to index it.
+                    local_snapshot = (archived.is_file()
+                                      and archived.resolve() == self.paths.archive.resolve() / relative)
+                    path = archived if relative.parts[0] == "raw" or local_snapshot else incoming / relative
+                    if hasattr(remote, "download_many") and not path.is_file():
                         batch = [item for item in downloads[index - 1:index + 19]
                                  if item.startswith(relative.parts[0] + "/")]
                         root = self.paths.archive if relative.parts[0] == "raw" else incoming
-                        batch = [item for item in batch if not (root / item).is_file()]
+                        batch = [item for item in batch if not (root / item).is_file()
+                                 and not (item.startswith("snapshots/") and (self.paths.archive / item).is_file())]
                         remote.download_many(batch, root)
                     # Raw dependencies live directly in the archive: never duplicate a
                     # whole history in both incoming/ and archive/ during a transfer.
-                    path = (self.paths.archive if relative.parts[0] == "raw" else incoming) / relative
                     _check_download_space(self.paths)
                     if not path.is_file():
                         remote.download(relative_string, path)
                     if relative.parts[0] == "snapshots":
                         payload = path.read_bytes()
+                        if path == archived and hashlib.sha256(payload).hexdigest() != path.name.split(".")[0]:
+                            # Do not trust a corrupt local candidate or discard it
+                            # before a replacement has passed cloud verification.
+                            path = incoming / relative
+                            remote.download(relative_string, path)
+                            payload = path.read_bytes()
                         if hashlib.sha256(payload).hexdigest() != path.name.split(".")[0]:
                             path.unlink()
                             _wait_for_incomplete_icloud_item(remote, relative_string)
