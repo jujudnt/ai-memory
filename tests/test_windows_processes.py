@@ -61,3 +61,28 @@ def test_native_child_has_no_console():
         creationflags=background_creationflags(), capture_output=True, text=True, check=True, timeout=15,
     )
     assert result.stdout.strip() == "0"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Requires pythonw and the Windows process API")
+def test_windowless_parent_hides_console_children(tmp_path):
+    import json
+    probe = tmp_path / "probe.py"
+    result_file = tmp_path / "result.json"
+    probe.write_text(
+        "import ctypes, json, subprocess\n"
+        "from pathlib import Path\n"
+        "from aimemory.processes import background_creationflags\n"
+        f"command = {[sys.executable, '-c', 'import ctypes; print(int(ctypes.windll.kernel32.GetConsoleWindow() or 0))']!r}\n"
+        "def child(flags):\n"
+        "    return subprocess.run(command, creationflags=flags, capture_output=True, text=True, check=True, timeout=15).stdout.strip()\n"
+        "result = {'parent': int(ctypes.windll.kernel32.GetConsoleWindow() or 0),\n"
+        "          'hidden': child(background_creationflags()), 'control': child(subprocess.CREATE_NEW_CONSOLE)}\n"
+        f"Path({str(result_file)!r}).write_text(json.dumps(result))\n",
+        encoding="utf-8",
+    )
+    subprocess.run([str(Path(sys.executable).with_name("pythonw.exe")), str(probe)],
+                   check=True, timeout=45)
+    data = json.loads(result_file.read_text())
+    assert data["parent"] == 0
+    assert data["hidden"] == "0"
+    assert data["control"] != "0", "Positive control must actually allocate a console"

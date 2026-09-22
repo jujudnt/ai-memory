@@ -330,7 +330,7 @@ npm test
 
 Les releases sont construites par [`.github/workflows/release.yml`](.github/workflows/release.yml) lors de l'envoi d'un tag `v*`. Le workflow exécute les tests, construit macOS et Windows, signe l'application macOS avec Developer ID, la soumet à la notarisation Apple, agrafe le ticket puis publie les ZIP.
 
-Sous Windows, un test supplémentaire lance l'exécutable graphique compilé dans un dossier temporaire : fenêtre interne de l'icône, actualisations répétées, démarrage du watcher et import d'une conversation de test. Il surveille l'apparition de consoles Windows, avec un contrôle préalable du détecteur. Les commandes de vérification et de lancement manuel du watcher sont masquées ; les journaux restent dans `~/.ai-memory/logs`. Ce test n'utilise pas de compte cloud réel et ne remplace pas un essai sur chaque configuration Windows.
+Sous Windows, un test supplémentaire lance l'exécutable graphique compilé dans un dossier temporaire : fenêtre interne de l'icône, actualisations répétées, démarrage du watcher et import d'une conversation de test. Un test natif vérifie qu'un parent sans console lance ses commandes sans leur attribuer de console, avec un contrôle positif. La surveillance visuelle des fenêtres n'est disponible que si le runner possède un bureau accessible ; le test signale explicitement son absence. Les commandes de vérification et de lancement manuel du watcher sont masquées ; les journaux restent dans `~/.ai-memory/logs`. Ces tests n'utilisent pas de compte cloud réel et ne remplacent pas un essai sur chaque configuration Windows.
 
 Les secrets GitHub nécessaires à la signature sont décrits dans [docs/release.md](docs/release.md).
 
@@ -669,7 +669,7 @@ npm test
 
 Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a `v*` tag is pushed. The workflow runs tests, builds macOS and Windows, signs the macOS application with Developer ID, submits it for Apple notarization, staples the ticket, and publishes both ZIP files.
 
-On Windows, an additional test launches the compiled GUI in a temporary directory: tray window registration, repeated status refreshes, watcher startup, and a sample conversation import. It monitors unexpected Windows consoles after first calibrating its detector. Watcher checks and manual startup run without console windows; logs remain in `~/.ai-memory/logs`. This test uses no real cloud account and does not replace testing on every Windows configuration.
+On Windows, an additional test launches the compiled GUI in a temporary directory: tray window registration, repeated status refreshes, watcher startup, and a sample conversation import. A native test verifies that a windowless parent starts commands without allocating consoles, with a positive control. Visual window monitoring requires an accessible desktop; the test explicitly reports when it is unavailable. Watcher checks and manual startup run without console windows; logs remain in `~/.ai-memory/logs`. These tests use no real cloud account and do not replace testing on every Windows configuration.
 
 Required GitHub signing secrets are documented in [docs/release.md](docs/release.md).
 
