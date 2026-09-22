@@ -87,7 +87,8 @@ class CloudSync:
                 redundant_snapshots = set() if pull_only or (self.paths.state / "migration.json").exists() else _redundant_snapshot_objects(self.paths, current_sources)
                 remote_redundant = redundant_snapshots & remote_objects
                 usable_remote_objects = remote_objects - remote_redundant
-                known = {relative: True for relative in known if relative in usable_remote_objects}
+                known = {relative: True for relative, confirmed in known.items()
+                         if confirmed and relative in usable_remote_objects}
                 migration_path = self.paths.state / "migration.json"
                 migration = read_json(migration_path)
                 if pull_only:
@@ -100,6 +101,7 @@ class CloudSync:
                         include_current_sources=True,
                         current_source_paths=current_sources,
                         excluded=redundant_snapshots,
+                        already_synced=set(known),
                     )
                 )
                 uploads = [] if pull_only else [
@@ -149,6 +151,17 @@ class CloudSync:
                                  totalTransfers=len(uploads))
                 if not uploads:
                     progress("uploading", object_count=len(usable_remote_objects))
+                # Reclaim already verified iCloud copies before receiving more history.
+                # A large or interrupted download must not postpone retention forever.
+                retention = {}
+                if (config["provider"] == "icloud-drive" and not pull_only and not migration
+                        and any(key.startswith("snapshots/") for key in known)):
+                    with self.service.lock.acquire(timeout=60):
+                        retention = prune_synced_local_copies(
+                            self.paths, {key: value for key, value in known.items() if key.startswith("snapshots/")},
+                            confirm_copy=remote.confirm_uploaded_copy,
+                            heartbeat=heartbeat,
+                        )
                 if remote_redundant and not pull_only:
                     check_cancelled(self.paths)
                     remote.delete_many(remote_redundant)
@@ -244,13 +257,22 @@ class CloudSync:
                     migration_path.unlink(missing_ok=True)
                 # A local cloud folder is not proof of upload to the provider.
                 can_prune = config["provider"] not in {"icloud-drive", "onedrive", "dropbox"}
-                retention = {}
                 if can_prune and not pull_only and (not migration or migration_complete):
                     with self.service.lock.acquire(timeout=60):
                         retention = prune_synced_local_copies(
                             self.paths, known, redundant_snapshots=redundant_snapshots,
                             current_source_paths=_current_source_paths(self.service),
                         )
+                elif config["provider"] == "icloud-drive" and known and not pull_only and (not migration or migration_complete):
+                    with self.service.lock.acquire(timeout=60):
+                        final_retention = prune_synced_local_copies(
+                            self.paths, known, confirm_copy=remote.confirm_uploaded_copy,
+                            heartbeat=heartbeat,
+                        )
+                    for key in ("freed_bytes", "removed_count", "removed_raw_count", "removed_revision_count"):
+                        final_retention[key] += retention.get(key, 0)
+                    retention = final_retention
+                    write_json(self.paths.state / "retention-status.json", retention)
                 write_json(
                     self.paths.state / "semantic-cleanup.json",
                     {"version": 1, "completed_at": now(), "removed_count": len(redundant_snapshots)},
@@ -348,15 +370,20 @@ def prune_synced_local_copies(
     known: dict,
     redundant_snapshots: set[str] | None = None,
     current_source_paths: set[Path] | None = None,
+    confirm_copy=None,
+    heartbeat=lambda: None,
 ) -> dict:
     removable_roots = ("raw/", "snapshots/")
     freed = 0
     removed: list[str] = []
     for relative in sorted(path for path in known if path.startswith(removable_roots) and _allowed_object(path)):
+        heartbeat()
         target = paths.archive / relative
-        if not target.is_file():
+        if not known[relative] or not target.is_file() or target.resolve() != paths.archive.resolve() / relative:
             continue
         try:
+            if confirm_copy is not None and not confirm_copy(relative, target):
+                continue
             size = target.stat().st_size
             target.unlink()
             freed += size
@@ -411,6 +438,7 @@ def _iter_local_objects(
     include_current_sources: bool = False,
     current_source_paths: set[Path] | None = None,
     excluded: set[str] | None = None,
+    already_synced: set[str] | None = None,
 ):
     seen: set[str] = set()
     excluded = excluded or set()
@@ -428,6 +456,8 @@ def _iter_local_objects(
             payload = path.read_bytes()
             digest = hashlib.sha256(payload).hexdigest()
             relative = f"snapshots/{conversation_id}/{digest}{suffix}"
+            if relative in (already_synced or set()):
+                continue  # Do not recreate a purged revision every minute.
             target = archive / relative
             if not target.exists():
                 atomic_write(target, payload)
@@ -587,6 +617,39 @@ class LocalArchiveRemote:
         self.icloud = icloud
         self.progress = lambda *args, **kwargs: None
 
+    def confirm_uploaded_copy(self, relative: str, local_path: Path) -> bool:
+        """Confirm a previously verified immutable object, without hydrating iCloud.
+
+        The caller must restrict this to the current destination's successful sync
+        checkpoints. An evicted object is already in iCloud: reading it again would
+        download the whole backup just to free its redundant local copy.
+        """
+        if not self.icloud or not _allowed_object(relative):
+            return False
+        target = self.root / relative
+        try:
+            if target.resolve() != self.root.resolve() / relative or not target.is_file():
+                return False
+            state = _icloud_upload_state(target)
+            if not state.get("uploaded") or state.get("size") != local_path.stat().st_size:
+                return False
+            # Resident files can additionally be compared byte for byte. Do not
+            # fetch an evicted object; the successful checkpoint + native upload
+            # confirmation identify that immutable cloud copy.
+            if state.get("resident"):
+                with local_path.open("rb") as local, target.open("rb") as cloud:
+                    while True:
+                        if hasattr(self, "heartbeat"):
+                            self.heartbeat()
+                        chunk = local.read(1024 * 1024)
+                        if chunk != cloud.read(1024 * 1024):
+                            return False
+                        if not chunk:
+                            break
+            return bool(_icloud_upload_state(target).get("uploaded"))
+        except OSError:
+            return False
+
     def _io(self, operation, path: Path):
         for attempt in range(3):
             try:
@@ -668,6 +731,36 @@ class LocalArchiveRemote:
         _request_icloud_download(path.parent)
         _request_icloud_download(path)
         return message
+
+
+def _icloud_upload_state(path: Path) -> dict:
+    """Fail closed when Foundation, metadata, or upload confirmation is absent."""
+    if sys.platform != "darwin":
+        return {}
+    try:
+        from Foundation import (
+            NSURL, NSURLIsUbiquitousItemKey, NSURLFileSizeKey,
+            NSURLUbiquitousItemIsUploadedKey, NSURLUbiquitousItemIsUploadingKey,
+            NSURLUbiquitousItemUploadingErrorKey, NSURLUbiquitousItemDownloadingStatusKey,
+            NSURLUbiquitousItemDownloadingStatusCurrent,
+        )
+        keys = [NSURLIsUbiquitousItemKey, NSURLFileSizeKey,
+                NSURLUbiquitousItemIsUploadedKey, NSURLUbiquitousItemIsUploadingKey,
+                NSURLUbiquitousItemUploadingErrorKey, NSURLUbiquitousItemDownloadingStatusKey]
+        values, error = NSURL.fileURLWithPath_(str(path)).resourceValuesForKeys_error_(keys, None)
+        if error or not values:
+            return {}
+        return {
+            "uploaded": bool(values.get(NSURLIsUbiquitousItemKey)
+                             and values.get(NSURLUbiquitousItemIsUploadedKey)
+                             and values.get(NSURLUbiquitousItemIsUploadingKey) is not None
+                             and not values.get(NSURLUbiquitousItemIsUploadingKey)
+                             and not values.get(NSURLUbiquitousItemUploadingErrorKey)),
+            "size": values.get(NSURLFileSizeKey),
+            "resident": values.get(NSURLUbiquitousItemDownloadingStatusKey) == NSURLUbiquitousItemDownloadingStatusCurrent,
+        }
+    except Exception:
+        return {}
 
 
 def _request_icloud_download(path: Path) -> None:

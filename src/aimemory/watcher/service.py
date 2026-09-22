@@ -87,6 +87,9 @@ class WatcherService:
             self.status.last_error = str(exc)
             self.status.last_error_at = _now()
         self._write_status()
+        # Index maintenance is local work, including when cloud sync is paused,
+        # offline, or waiting to retry. Its own locks defer it during transfers.
+        compact_search_index(self.service.paths)
         # Cloud failures do not erase the collector's independent health signal.
         thread = getattr(self, "_sync_thread", None)
         sync_status = read_json(self.service.paths.state / "sync-status.json")

@@ -137,8 +137,22 @@ class MemoryDatabase:
                     title,
                     content
                 );
+
+                CREATE TABLE IF NOT EXISTS fts_conversation_rows (
+                    fts_rowid INTEGER PRIMARY KEY,
+                    conversation_id TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_fts_conversation_rows
+                ON fts_conversation_rows(conversation_id);
+                CREATE TABLE IF NOT EXISTS index_migrations (name TEXT PRIMARY KEY);
                 """
             )
+            # FTS UNINDEXED identifiers still require a full scan (including old
+            # multi-GB content). Scan once on upgrade, then address rows directly.
+            if not conn.execute("SELECT 1 FROM index_migrations WHERE name='fts-rowids-v1'").fetchone():
+                conn.execute("DELETE FROM fts_conversation_rows")
+                conn.execute("INSERT INTO fts_conversation_rows SELECT rowid, conversation_id FROM conversations_fts")
+                conn.execute("INSERT OR IGNORE INTO index_migrations VALUES ('fts-rowids-v1')")
 
     def upsert_conversation(
         self,
@@ -176,7 +190,8 @@ class MemoryDatabase:
 
             conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation.id,))
             conn.execute("DELETE FROM tool_calls WHERE conversation_id = ?", (conversation.id,))
-            conn.execute("DELETE FROM conversations_fts WHERE conversation_id = ?", (conversation.id,))
+            conn.execute("DELETE FROM conversations_fts WHERE rowid IN (SELECT fts_rowid FROM fts_conversation_rows WHERE conversation_id=?)", (conversation.id,))
+            conn.execute("DELETE FROM fts_conversation_rows WHERE conversation_id=?", (conversation.id,))
             conn.execute(
                 """
                 INSERT OR REPLACE INTO conversations(
@@ -230,7 +245,7 @@ class MemoryDatabase:
                         call.ordinal,
                     ),
                 )
-            conn.execute(
+            fts_cursor = conn.execute(
                 """
                 INSERT INTO conversations_fts(conversation_id, source, project_id, title, content)
                 VALUES (?, ?, ?, ?, ?)
@@ -243,6 +258,7 @@ class MemoryDatabase:
                     conversation.searchable_text(),
                 ),
             )
+            conn.execute("INSERT INTO fts_conversation_rows VALUES (?, ?)", (fts_cursor.lastrowid, conversation.id))
 
             conn.execute("INSERT OR REPLACE INTO compact_index_versions VALUES (?, 1)", (conversation.id,))
 
@@ -465,7 +481,7 @@ class MemoryDatabase:
         self.initialize()
         with self.connect() as conn:
             conn.execute("UPDATE conversations SET source = ? WHERE id = ?", (source, conversation_id))
-            conn.execute("UPDATE conversations_fts SET source = ? WHERE conversation_id = ?", (source, conversation_id))
+            conn.execute("UPDATE conversations_fts SET source = ? WHERE rowid IN (SELECT fts_rowid FROM fts_conversation_rows WHERE conversation_id=?)", (source, conversation_id))
 
     def get_conversation_row(self, conversation_id: str) -> dict[str, Any] | None:
         self.initialize()

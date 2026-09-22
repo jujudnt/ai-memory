@@ -1,5 +1,6 @@
 import hashlib
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -89,3 +90,38 @@ def test_maintenance_waits_for_migration_and_respects_sync_lock(tmp_path):
     with FileLock(str(service.paths.state / "sync.lock")):
         assert compact_search_index(service.paths)["status"] == "busy"
     assert compact_search_index(service.paths)["compact_index_version"] == 1
+
+
+def test_fts_rowid_migration_preserves_search_and_prevents_duplicate_rows(tmp_path):
+    from aimemory.db.sqlite import MemoryDatabase
+    service = memory(tmp_path / "memory")
+    conversation = CodexAdapter(tmp_path).parse_session(session(tmp_path / "source"))
+    service.accept_conversation(conversation)
+    with service.db.connect() as conn:
+        conn.execute("DROP TABLE fts_conversation_rows")
+        conn.execute("DROP TABLE index_migrations")
+    database = MemoryDatabase(service.db.path)
+    database.initialize()
+    assert database.search("hello")
+    for _ in range(3):
+        database.upsert_conversation(conversation, Path(service.db.archive_entries()[0]["archive_path"]))
+    with database.connect() as conn:
+        assert conn.execute("SELECT count(*) FROM conversations_fts").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM fts_conversation_rows").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM fts_conversation_rows m JOIN conversations_fts f ON f.rowid=m.fts_rowid AND f.conversation_id=m.conversation_id").fetchone()[0] == 1
+    assert database.search("hello")
+
+
+@pytest.mark.parametrize("preferences,status", [({"paused": True}, {}), ({}, {"retry_after": 99999999999})])
+def test_watcher_maintains_local_index_while_cloud_is_paused(tmp_path, monkeypatch, preferences, status):
+    from types import SimpleNamespace
+    from aimemory.watcher.service import WatcherService
+    service = memory(tmp_path / "memory")
+    write_json(service.paths.state / "sync-preferences.json", preferences)
+    write_json(service.paths.state / "sync-status.json", status)
+    monkeypatch.setattr(service, "import_all", lambda **_: SimpleNamespace(scanned=0, imported=0, skipped=0, errors=[]))
+    calls = []
+    monkeypatch.setattr("aimemory.watcher.service.compact_search_index", lambda paths: calls.append(paths))
+    monkeypatch.setattr(service, "sync_now", lambda: pytest.fail("Cloud should remain paused"))
+    WatcherService(service).scan_once()
+    assert calls == [service.paths]
