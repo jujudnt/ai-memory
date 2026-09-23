@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import json
 import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,7 +23,8 @@ from aimemory.db.sqlite import file_hash
 from aimemory.models import NormalizedConversation
 from aimemory.sources import CODEX_SOURCES
 from aimemory.search import SearchService
-from aimemory.state import atomic_write, folder_bytes, now, read_json, write_json
+from aimemory.state import atomic_write, now, read_json, write_json
+from aimemory.storage_usage import storage_usage
 
 
 @dataclass(slots=True)
@@ -44,6 +46,8 @@ class MemoryService:
         self.lock = FileLock(str(self.paths.state / "operations.lock"), timeout=1)
         self._storage_cache = None
         self._storage_checked = 0.0
+        self._storage_lock = threading.Lock()
+        self._snapshot_cache = {}
 
     def import_codex(self, codex_home: Path | None = None, force: bool = False) -> ImportResult:
         with self.lock:
@@ -254,17 +258,11 @@ class MemoryService:
         status["archive"] = str(self.paths.archive)
         status["archive_count"] = status["conversation_count"]
         config = read_json(self.paths.state / "cloud.json")
-        if self._storage_cache is None or time.monotonic() - self._storage_checked > 15:
-            self._storage_cache = {
-                "archive_bytes": folder_bytes(self.paths.archive),
-                "normalized_bytes": folder_bytes(self.paths.archive / "sources"),
-                "raw_bytes": folder_bytes(self.paths.archive / "raw"),
-                "revisions_bytes": folder_bytes(self.paths.archive / "snapshots"),
-                "cache_bytes": folder_bytes(self.paths.cache),
-                "database_bytes": sum(p.stat().st_size for p in self.paths.db.glob("memory.sqlite*")),
-                "total_bytes": folder_bytes(self.paths.home),
-            }
-            self._storage_checked = time.monotonic()
+        if self._storage_cache is None or time.monotonic() - self._storage_checked > 60:
+            with self._storage_lock:
+                if self._storage_cache is None or time.monotonic() - self._storage_checked > 60:
+                    self._storage_cache = storage_usage(self.paths.home)
+                    self._storage_checked = time.monotonic()
         status["storage"] = {
             "provider": config.get("provider", "local-folder"),
             "provider_label": provider_label(config.get("provider")),

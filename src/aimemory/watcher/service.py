@@ -54,6 +54,13 @@ class WatcherService:
         except Timeout:
             return
         self.status.running = True
+        # Only the background collector yields CPU priority, not the GUI or MCP.
+        if not once and hasattr(os, "setpriority"):
+            try:
+                priority = os.getpriority(os.PRIO_PROCESS, 0)
+                os.setpriority(os.PRIO_PROCESS, 0, max(priority, 10))
+            except OSError:
+                pass
         self.status.pid = os.getpid()
         self.status.started_at = _now()
         self._write_status()
@@ -112,6 +119,10 @@ class WatcherService:
                     compact_search_index(self.service.paths)
                 except Exception:
                     pass  # CloudSync persists failures and the next minute retries.
+                finally:
+                    # Rest after completion too: a long sync must not cause an
+                    # immediate full cloud listing on the next collector tick.
+                    self._last_sync = time.monotonic()
             self._sync_thread = threading.Thread(target=synchronize, daemon=True)
             self._sync_thread.start()
 

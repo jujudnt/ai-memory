@@ -102,6 +102,7 @@ class CloudSync:
                         current_source_paths=current_sources,
                         excluded=redundant_snapshots,
                         already_synced=set(known),
+                        fingerprint_cache=getattr(self.service, "_snapshot_cache", None),
                     )
                 )
                 uploads = [] if pull_only else [
@@ -449,6 +450,7 @@ def _iter_local_objects(
     current_source_paths: set[Path] | None = None,
     excluded: set[str] | None = None,
     already_synced: set[str] | None = None,
+    fingerprint_cache: dict | None = None,
 ):
     seen: set[str] = set()
     excluded = excluded or set()
@@ -463,13 +465,30 @@ def _iter_local_objects(
             conversation_id = path.name.removesuffix(suffix)
             if not re.fullmatch(r"[a-zA-Z0-9_-]+", conversation_id):
                 raise ValueError("Unexpected current conversation archive")
-            payload = path.read_bytes()
-            digest = hashlib.sha256(payload).hexdigest()
+            fingerprint = _file_fingerprint(path)
+            cached = fingerprint_cache.get(str(path)) if fingerprint_cache is not None else None
+            payload = None
+            if cached and cached[0] == fingerprint:
+                digest = cached[1]
+            else:
+                payload = path.read_bytes()
+                digest = hashlib.sha256(payload).hexdigest()
+                if fingerprint_cache is not None and _file_fingerprint(path) == fingerprint:
+                    fingerprint_cache[str(path)] = (fingerprint, digest)
             relative = f"snapshots/{conversation_id}/{digest}{suffix}"
             if relative in (already_synced or set()):
                 continue  # Do not recreate a purged revision every minute.
             target = archive / relative
             if not target.exists():
+                if payload is None:
+                    # A purged snapshot is rebuilt from fresh bytes, never from
+                    # a cached hash: the source may have changed in the meantime.
+                    payload = path.read_bytes()
+                    digest = hashlib.sha256(payload).hexdigest()
+                    relative = f"snapshots/{conversation_id}/{digest}{suffix}"
+                    if relative in (already_synced or set()):
+                        continue
+                    target = archive / relative
                 atomic_write(target, payload)
             if relative in excluded:
                 continue
@@ -484,6 +503,11 @@ def _iter_local_objects(
                 if relative not in seen and relative not in excluded:
                     seen.add(relative)
                     yield relative, path
+
+
+def _file_fingerprint(path: Path) -> tuple[int, int, int, int]:
+    info = path.stat()
+    return info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino
 
 
 def _current_source_paths(service) -> set[Path]:

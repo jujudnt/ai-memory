@@ -195,6 +195,12 @@ Il n'y a pas encore de limite automatique de taille de l'historique cloud : les 
 
 Les transferts sont adressés par le hash du contenu : relancer une synchronisation ne crée pas une seconde copie du même objet. AI Memory fusionne également les snapshots dont le contenu conversationnel est identique, même si Codex ou Claude les a signalés sous un autre client, puis retire ces variantes redondantes du cloud.
 
+### Charge en arrière-plan
+
+Depuis la version 0.4.32, le watcher continu demande une priorité CPU réduite sur macOS/Linux. Les empreintes des archives courantes sont réutilisées tant que leur taille, dates de modification/changement et inode restent identiques ; les changements sont toujours vérifiés. Le calcul des tailles parcourt le stockage une seule fois, au maximum une fois par minute par interface. Une synchronisation automatique attend normalement une minute **après la fin** de la précédente (15 secondes si le dossier cloud local est indisponible) ; une demande explicite reste immédiate.
+
+Le premier import, une grosse conversation active et les transferts iCloud peuvent encore consommer des ressources. Ces optimisations ne constituent pas une limite stricte de CPU ou de mémoire. Pour diagnostiquer un autre ordinateur, relever AI Memory / ai-memory-cli / rclone dans le Moniteur d'activité, ainsi que la pression mémoire ; une mesure sur un autre Mac ne permet pas d'attribuer le ralentissement.
+
 ### Confidentialité et sécurité
 
 - Les conversations et l'index restent sur l'ordinateur, sauf les archives envoyées vers la destination choisie.
@@ -533,6 +539,12 @@ For **iCloud/OneDrive/Dropbox on the Mac**, a local copy does not prove server u
 There is not yet an automatic cloud history size limit: genuinely distinct revisions are retained. Migration may require substantial local space; AI Memory stops with an explicit error if its free-space reserve is insufficient rather than deleting an unconfirmed copy.
 
 Transfers are content-addressed: restarting synchronization does not create another copy of the same object. AI Memory also merges snapshots with identical conversation content even when Codex or Claude reported them under another client, then removes those redundant variants from the cloud.
+
+### Background resource usage
+
+Since version 0.4.32, the continuous watcher requests lower CPU priority on macOS/Linux. Current archive hashes are reused while size, modification/change timestamps and inode remain unchanged; changes are still checked. Storage size calculation walks the data once, at most once a minute per interface. Automatic synchronization normally waits one minute **after the previous run finishes** (15 seconds when the local cloud folder is unavailable); explicit requests remain immediate.
+
+The initial import, a large active conversation and iCloud transfers can still consume resources. These optimizations are not strict CPU or memory caps. To diagnose another computer, inspect AI Memory / ai-memory-cli / rclone in Activity Monitor together with memory pressure; measurements on a different Mac cannot establish the cause of a slowdown.
 
 ### Privacy and security
 
