@@ -257,9 +257,11 @@ class CloudSync:
                     staged = incoming / relative_string
                     if staged.is_file() and (self.paths.archive / relative_string).is_file():
                         staged.unlink()
-                migration_complete = (
+                migration_objects = set(migration.get("objects", []))
+                migration_complete = bool(migration) and migration_objects <= usable_remote_objects and (
                     migration.get("source_identity") != remote_identity
-                    and set(migration.get("objects", [])) <= usable_remote_objects
+                    or (config["provider"] not in {"icloud-drive", "onedrive", "dropbox"}
+                        and migration_objects <= known.keys())
                 )
                 if pull_only:
                     migration.update(status="prepared", prepared_at=now())

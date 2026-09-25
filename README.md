@@ -185,6 +185,8 @@ AI Memory affiche séparément :
 
 Après une sauvegarde cloud vérifiée, AI Memory supprime automatiquement du Mac les originaux compressés et les anciennes révisions lourdes qui sont confirmés dans le cloud. Les conversations courantes et l'index restent disponibles localement afin que le MCP soit rapide et fonctionne hors ligne.
 
+Depuis la version 0.4.33, une préparation de migration restée sur la destination déjà connectée se termine dès que tous ses objets sont confirmés sur cette destination. Elle ne bloque alors plus le nettoyage local. Si un objet manque encore, les copies locales sont conservées. L'espace n'est récupéré qu'après une synchronisation réussie sur la nouvelle version ; retirer manuellement `migration.json` ou les archives peut compromettre une vraie migration.
+
 L'index compact recherche dans les messages utilisateur/assistant, les projets, les fichiers, les commandes (4 096 caractères par commande), les noms d'outils et le début de leurs arguments (2 048 caractères). Les volumineuses sorties d'outils et les instructions système ne sont plus dupliquées dans l'index plein texte. Leur contenu intégral reste consultable : les sorties d'outils sont compressées sans perte et décompressées à la demande par le MCP. Les archives ne sont pas tronquées. La conversion des anciens index est automatique et progressive, puis SQLite récupère l'espace libéré hors transfert/import. Cette conversion ne renvoie pas les archives dans le cloud.
 
 La vectorisation n'est pas encore implémentée et ne remplacerait pas les archives : elle ajouterait un modèle et un index pour la recherche sémantique. Le gain d'espace de cette version vient de l'index compact et de la compression, pas de vecteurs. Il ne s'agit pas encore d'un mode entièrement « cloud à la demande » : les conversations courantes restent sur le Mac.
@@ -529,6 +531,8 @@ AI Memory reports these values separately:
 - **Total on this computer**: all local AI Memory files, including temporary files and synchronization state.
 
 After a verified cloud backup, AI Memory automatically removes compressed originals and large historical revisions from the Mac when they are confirmed in the cloud. Current conversations and the search index remain local so MCP stays fast and works offline.
+
+Since version 0.4.33, a prepared migration that still targets the connected destination completes once every object is confirmed there. It no longer blocks local cleanup. If an object is missing, local copies are retained. Space is reclaimed after a successful sync with the new version; manually deleting `migration.json` or archives can disrupt a real migration.
 
 The compact index searches user/assistant messages, projects, files, commands (4,096 characters per command), tool names, and argument prefixes (2,048 characters). Large tool outputs and system instructions are no longer duplicated in the full-text index. Their full content remains accessible: tool data is compressed losslessly and decompressed on demand by MCP. Archives are not truncated. Existing indexes are converted automatically in small batches, then SQLite reclaims free space outside transfers/imports. This conversion does not upload archives again.
 

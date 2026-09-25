@@ -44,6 +44,52 @@ def test_migration_preserves_every_pruned_revision_and_original(tmp_path):
     assert not (service.paths.state / "migration.json").exists()
 
 
+def test_same_destination_pull_does_not_block_local_retention(tmp_path):
+    service = memory(tmp_path / "memory")
+    codex = tmp_path / "codex"
+    session(codex)
+    connect(service, tmp_path / "remote", "same-destination")
+    service.import_codex(codex)
+    service.sync_now()
+
+    # A reconnect or a cancelled destination change may prepare a migration
+    # against the destination that is already active.
+    pulled = service.pull_cloud_now()
+    assert pulled["status"] == "synced"
+    migration = read_json(service.paths.state / "migration.json")
+    assert migration["status"] == "prepared"
+    assert migration["source_identity"] == "same-destination"
+    local_snapshot = next((tmp_path / "remote" / "snapshots").rglob("*.json.*"))
+    archived_snapshot = service.paths.archive / local_snapshot.relative_to(tmp_path / "remote")
+    assert archived_snapshot.is_file()
+
+    result = service.sync_now()
+
+    assert result["status"] == "synced"
+    assert not (service.paths.state / "migration.json").exists()
+    assert not archived_snapshot.exists()
+    assert local_snapshot.is_file()
+
+
+def test_same_destination_migration_keeps_local_copy_if_remote_is_incomplete(tmp_path):
+    service = memory(tmp_path / "memory")
+    codex = tmp_path / "codex"
+    session(codex)
+    connect(service, tmp_path / "remote", "same-destination")
+    service.import_codex(codex)
+    write_json(service.paths.state / "migration.json", {
+        "status": "preparing", "source_identity": "same-destination",
+        "objects": ["snapshots/missing/" + "0" * 64 + ".json.zst"],
+    })
+
+    result = service.sync_now()
+
+    assert result["status"] == "synced"
+    assert (service.paths.state / "migration.json").exists()
+    assert result["retention"] == {}
+    assert list((service.paths.archive / "raw").rglob("*.gz"))
+
+
 def test_download_resume_does_not_receive_validated_objects_twice(tmp_path, monkeypatch):
     a, b = memory(tmp_path / "a"), memory(tmp_path / "b")
     source, root = tmp_path / "source", tmp_path / "remote"
