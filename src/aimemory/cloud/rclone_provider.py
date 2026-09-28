@@ -107,7 +107,8 @@ class RcloneCloudProvider:
                     raise ICloudTermsAcceptanceRequired(ICLOUD_TERMS_MESSAGE)
                 if _icloud_web_approval_error(result.stderr):
                     raise ICloudWebApprovalRequired(ICLOUD_WEB_APPROVAL_MESSAGE)
-            raise CloudError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode), error_category(result.stderr))
+            raise CloudError(_friendly_rclone_error(self.spec.provider, result.stderr, result.returncode),
+                             error_category(result.stderr, self.spec.provider))
         return result.stdout
 
     def connect(self, options: dict | None = None) -> dict | None:
@@ -513,7 +514,7 @@ def _icloud_web_approval_error(output: str | bytes | None) -> bool:
     lowered = text.lower()
     return any(
         marker in lowered
-        for marker in ("missing pcs cookies", "requestpcs(")
+        for marker in ("missing pcs cookies", "cookies still missing", "timed out waiting for device approval")
     )
 
 
@@ -527,24 +528,26 @@ def _friendly_rclone_error(provider: str, output: str | bytes | None, code: int)
     text = (output or "").decode("utf-8", "ignore") if isinstance(output, bytes) else (output or "")
     lowered = text.lower()
     name = provider_label(provider)
+    category = error_category(text, provider)
+    if category == "quota":
+        return f"{name} est plein. Libérez de l'espace ou changez de destination cloud."
     if provider == "icloud-online":
         if _icloud_terms_error(text):
             return ICLOUD_TERMS_MESSAGE
         if _icloud_web_approval_error(text):
             return ICLOUD_WEB_APPROVAL_MESSAGE
-        if any(marker in lowered for marker in ("2fa", "two-factor", "verification", "mfa", "auth", "unauthorized", "forbidden")):
+        if category == "auth":
             return (
                 "La vérification Apple a échoué ou la session a expiré. "
                 "Si un code est attendu, vérifiez les six chiffres. Sinon, recommencez la connexion iCloud. "
                 "Utilisez le mot de passe Apple ID normal, pas un mot de passe spécifique d'app."
             )
+        return (
+            "iCloud Drive est temporairement indisponible. "
+            "Nouvelle tentative automatique avec la session enregistrée ; les transferts validés sont conservés."
+        )
     if any(marker in lowered for marker in ("insufficient storage", "not enough space", "quota", "storage full", "drive is full")):
         return f"{name} est plein. Libérez de l'espace ou changez de destination cloud."
     if any(marker in lowered for marker in ("unauthorized", "invalid_grant", "access denied", "forbidden", "authentication", "auth")):
         return f"Connexion {name} refusée ou expirée. Reconnectez ce compte."
-    if provider == "icloud-online":
-        return (
-            "iCloud Drive est temporairement indisponible. Vérifiez le réseau ; "
-            "les transferts validés sont conservés et une nouvelle tentative est prévue."
-        )
     return f"{name} a échoué (code {code}). Vérifiez la connexion puis relancez."

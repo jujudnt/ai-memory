@@ -50,6 +50,7 @@ class CloudSync:
             status = read_json(self.status_path)
             status.update(status="preparing", started_at=now(), error=None, message=None,
                           error_category=None, retry_after=None, requires_action=False,
+                          auth_action_confirmed=False,
                           transfers=0, totalTransfers=0, confirmedBefore=0,
                           bytes=0, totalBytes=0, speed=0)
             status_lock = threading.RLock()
@@ -292,7 +293,7 @@ class CloudSync:
                 )
                 status.update(status="synced", last_success_at=now(), indexed=indexed,
                               object_count=len(usable_remote_objects), retention=retention, error=None,
-                              failures=0, retry_after=None,
+                              failures=0, retry_after=None, failed_at=None,
                               confirmation="local_folder" if not can_prune else "remote")
             except CloudFolderPending as exc:
                 status.update(status="waiting_local_cloud", error=str(exc), heartbeat_at=now(),
@@ -312,6 +313,7 @@ class CloudSync:
                 status.update(status="paused" if isinstance(exc, SyncCancelled) else "error",
                               error=str(exc), failed_at=now(), error_category=category,
                               requires_action=category == "auth", failures=failures,
+                              auth_action_confirmed=category == "auth",
                               retry_after=time.time() + min(900, 30 * 2 ** min(failures, 5)))
                 raise
             finally:
@@ -935,5 +937,6 @@ class RcloneArchiveRemote:
                 raise CloudError(_friendly_google_error(stderr, process.returncode), error_category(stderr))
             from aimemory.cloud.rclone_provider import _friendly_rclone_error
 
-            raise CloudError(_friendly_rclone_error(self.provider, stderr, process.returncode), error_category(stderr))
+            raise CloudError(_friendly_rclone_error(self.provider, stderr, process.returncode),
+                             error_category(stderr, self.provider))
         return stdout

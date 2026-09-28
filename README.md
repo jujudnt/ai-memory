@@ -83,6 +83,8 @@ Si un drive est plein, libérez de l'espace ou changez de destination. AI Memory
 - **iCloud Drive du Mac** utilise le compte déjà connecté à macOS. Les deux Mac doivent utiliser le même compte iCloud et le même dossier de sauvegarde.
 - **iCloud Drive en ligne** utilise une connexion distincte. Entrez d'abord l'identifiant et le mot de passe Apple, validez la demande sur l'appareil Apple, puis saisissez le code dans le champ 2FA qui apparaît et cliquez sur **Confirmer le code iCloud**.
 - Avec la Protection avancée des données, activez **Accès aux données iCloud sur le Web** dans les réglages du compte Apple et acceptez l'éventuelle demande supplémentaire.
+
+Les erreurs temporaires iCloud, y compris un refus HTTP 401/403 isolé, sont retentées automatiquement avec la session enregistrée et un délai progressif jusqu'à 15 minutes. Aucun clic sur recharger n'est nécessaire. Les anciens blocages sont revérifiés après la mise à jour. Une demande explicite de code Apple, d'acceptation des conditions ou d'autorisation sur l'appareil reste signalée et suspend les tentatives pour éviter des demandes répétées. Le mode iCloud en ligne ne peut pas garantir une connexion permanente : [rclone documente une validité de 30 jours pour le jeton de confiance](https://rclone.org/iclouddrive/#configuration), après laquelle Apple peut exiger une nouvelle validation. Le mode **iCloud Drive du Mac** s'appuie sur la session gérée par macOS.
 - Si Apple demande d'accepter de nouvelles conditions, connectez-vous une fois sur [icloud.com](https://www.icloud.com/), acceptez-les, puis relancez la connexion dans AI Memory.
 - Si un fichier iCloud local reste indisponible, ouvrez `iCloud Drive/AI-Memory` dans Finder et choisissez **Télécharger** ou **Télécharger maintenant**.
 
@@ -430,6 +432,8 @@ If a drive is full, free some space or change destination. AI Memory retains dat
 - **iCloud Drive du Mac** uses the account already signed in to macOS. Both Macs must use the same iCloud account and backup folder.
 - **Online iCloud Drive** uses a separate login. Enter the Apple ID and password first, approve the request on the Apple device, enter the code in the 2FA field that appears, then click **Confirmer le code iCloud**.
 - With Advanced Data Protection, enable **Access iCloud Data on the Web** in Apple Account settings and approve any additional prompt.
+
+Temporary iCloud failures, including an isolated HTTP 401/403 refusal, are retried automatically using the saved session, with a progressively increasing delay capped at 15 minutes. No reload click is needed. Previously blocked connections are rechecked after upgrading. An explicit request for an Apple code, terms acceptance, or device approval remains visible and pauses retries to avoid repeated prompts. Online iCloud cannot guarantee a permanent login: [rclone documents a 30-day trust token lifetime](https://rclone.org/iclouddrive/#configuration), after which Apple may require verification again. **iCloud Drive du Mac** relies on the session managed by macOS.
 - If Apple requires updated terms to be accepted, sign in once at [icloud.com](https://www.icloud.com/), accept them, then retry in AI Memory.
 - If a local iCloud file remains unavailable, open `iCloud Drive/AI-Memory` in Finder and select **Download** or **Download Now**.
 

@@ -102,7 +102,15 @@ class WatcherService:
         sync_status = read_json(self.service.paths.state / "sync-status.json")
         request = self.service.paths.state / "sync-request.json"
         requested = request.exists()
-        if not requested and (sync_status.get("requires_action") or
+        requires_action = sync_status.get("requires_action")
+        # Older versions permanently blocked even generic iCloud 401/403 errors.
+        # Recheck them once with the saved session and the precise classifier.
+        if (requires_action and sync_status.get("error_category") == "auth"
+                and "auth_action_confirmed" not in sync_status
+                and read_json(self.service.paths.state / "cloud.json").get("provider") == "icloud-online"
+                and not read_json(self.service.paths.state / "icloud-auth.json")):
+            requires_action = False
+        if not requested and (requires_action or
                 (sync_status.get("retry_after") or 0) > time.time() or
                 read_json(self.service.paths.state / "sync-preferences.json").get("paused")):
             return
