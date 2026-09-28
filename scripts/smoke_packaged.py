@@ -48,8 +48,8 @@ def main() -> None:
             {"type": "response_item", "timestamp": "2026-09-21T00:00:00Z", "payload": {
                 "type": "message", "role": "user", "content": "packaged-smoke-marker"}},
         ]) + "\n")
-        def run(*args):
-            return subprocess.run([executable, *args], env=env, capture_output=True,
+        def run(*args, environment=None):
+            return subprocess.run([executable, *args], env=environment or env, capture_output=True,
                                   text=True, timeout=60, check=True).stdout
         run("--help")
         run("watch", "--once")
@@ -57,7 +57,34 @@ def main() -> None:
         assert status["conversation_count"] == 1, status
         assert status["watcher"]["last_error"] is None, status
         asyncio.run(asyncio.wait_for(check_mcp(executable, env), timeout=60))
-    print("Packaged CLI, isolated watcher and MCP handshake/search passed.")
+        # Use the shipped executable on both sides of an isolated shared folder:
+        # import -> upload -> receive -> search, then repeat without duplication.
+        other = {**env, "AI_MEMORY_HOME": str(root / "second memory"), "CODEX_HOME": str(root / "other codex")}
+        cloud = {"provider": "local-folder", "root": str(root / "shared cloud")}
+        for environment in (env, other):
+            state = Path(environment["AI_MEMORY_HOME"]) / "state"
+            state.mkdir(parents=True, exist_ok=True)
+            (state / "cloud.json").write_text(json.dumps(cloud), encoding="utf-8")
+        run("sync")
+        run("sync", environment=other)
+        assert "packaged-smoke-marker" in run("search", "packaged-smoke-marker", environment=other)
+        second_source = Path(other["CODEX_HOME"]) / "sessions/second.jsonl"
+        second_source.parent.mkdir(parents=True)
+        second_source.write_text("\n".join(json.dumps(row) for row in [
+            {"type": "session_meta", "payload": {"id": "second-device"}},
+            {"type": "response_item", "timestamp": "2026-09-28T00:00:00Z", "payload": {
+                "type": "message", "role": "user", "content": "second-device-sync-marker"}},
+        ]) + "\n", encoding="utf-8")
+        run("import-codex", environment=other)
+        run("sync", environment=other)
+        run("sync")
+        assert "second-device-sync-marker" in run("search", "second-device-sync-marker")
+        run("sync")
+        for environment in (env, other):
+            status = json.loads(run("doctor", environment=environment))
+            assert status["conversation_count"] == 2, status
+            assert not list((Path(environment["AI_MEMORY_HOME"]) / "archive/raw").rglob("*.gz"))
+    print("Packaged CLI, watcher, MCP search, two-device sync, deduplication and local retention passed.")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -117,11 +119,11 @@ class VSCodeAdapter:
 
 def _default_code_user_dir() -> Path:
     home = Path.home()
-    if (home / "Library" / "Application Support" / "Code" / "User").exists():
+    if sys.platform == "darwin":
         return home / "Library" / "Application Support" / "Code" / "User"
-    if (home / "AppData" / "Roaming" / "Code" / "User").exists():
-        return home / "AppData" / "Roaming" / "Code" / "User"
-    return home / ".config" / "Code" / "User"
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming"))) / "Code" / "User"
+    return Path(os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))) / "Code" / "User"
 
 
 def _timestamp(value: Any) -> str | None:
@@ -141,7 +143,15 @@ def _workspace_folder(path: Path) -> str | None:
         return None
     folder = data.get("folder") or data.get("workspace")
     if isinstance(folder, str) and folder.startswith("file://"):
-        return unquote(urlsplit(folder).path)
+        url = urlsplit(folder)
+        if sys.platform == "win32":
+            decoded = unquote(url.path)
+            if url.netloc and url.netloc != "localhost":
+                decoded = "//" + unquote(url.netloc) + decoded
+            elif decoded.startswith("/") and PureWindowsPath(decoded[1:]).drive.endswith(":"):
+                decoded = decoded[1:]
+            return str(PureWindowsPath(decoded))
+        return unquote(url.path)
     return folder if isinstance(folder, str) else None
 
 

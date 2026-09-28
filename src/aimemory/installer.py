@@ -9,10 +9,14 @@ import subprocess
 import sys
 import json
 import filecmp
+import uuid
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from aimemory.state import atomic_write
 from aimemory.processes import background_creationflags
+from aimemory.config import AppPaths
+from filelock import FileLock, Timeout
 
 
 MCP_SERVER_NAME = "ai-memory"
@@ -352,20 +356,31 @@ def _launch_agent_status() -> WatcherServiceStatus:
     )
 
 
-def _install_windows_task(interval_seconds: float) -> InstallResult:
-    command = " ".join(_quote_win(part) for part in [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)])
+def _install_windows_task(interval_seconds: float, task_name: str = "AI Memory Watcher") -> InstallResult:
+    paths = AppPaths.from_env()
+    paths.ensure()
+    command = [*resolve_aimemory_command(), "watch", "--interval", str(interval_seconds)]
+    launcher = paths.state / "watcher-launch.vbs"
+    # Task Scheduler does not inherit CREATE_NO_WINDOW from schtasks.exe.
+    # WScript keeps both its own window and the long-running console child hidden.
+    lines = ['Set shell = CreateObject("WScript.Shell")']
+    environment = {"AI_MEMORY_HOME": str(paths.home.resolve())}
+    environment.update({key: os.environ[key] for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR") if key in os.environ})
+    for key, value in environment.items():
+        lines.append(f'shell.Environment("PROCESS")({_vbs_string(key)}) = {_vbs_string(value)}')
+    lines.append(f'WScript.Quit shell.Run({_vbs_string(subprocess.list2cmdline(command))}, 0, True)')
+    atomic_write(launcher, ("\r\n".join(lines) + "\r\n").encode("utf-16"))
+    identity_output = subprocess.run(["whoami", "/USER", "/FO", "CSV", "/NH"], text=True,
+                                     errors="replace", capture_output=True, check=True,
+                                     creationflags=background_creationflags(), timeout=10).stdout
+    identity_match = re.search(r"S-1-(?:\d+-)*\d+", identity_output)
+    if not identity_match:
+        raise RuntimeError("Impossible d'identifier l'utilisateur Windows pour le démarrage automatique.")
+    identity = identity_match.group(0)
+    xml_path = paths.state / "watcher-task.xml"
+    atomic_write(xml_path, _windows_task_xml(launcher, identity))
     result = subprocess.run(
-        [
-            "schtasks",
-            "/Create",
-            "/F",
-            "/SC",
-            "ONLOGON",
-            "/TN",
-            "AI Memory Watcher",
-            "/TR",
-            command,
-        ],
+        ["schtasks", "/Create", "/F", "/TN", task_name, "/XML", str(xml_path)],
         text=True,
         capture_output=True,
         check=False,
@@ -374,28 +389,68 @@ def _install_windows_task(interval_seconds: float) -> InstallResult:
     )
     if result.returncode != 0:
         return InstallResult(False, result.stderr.strip() or result.stdout.strip())
-    subprocess.run(["schtasks", "/Run", "/TN", "AI Memory Watcher"], check=True, capture_output=True,
+    # A registered task can still be executing the previous version.
+    subprocess.run(["schtasks", "/End", "/TN", task_name], check=False, capture_output=True,
                    creationflags=background_creationflags(), timeout=30)
-    return InstallResult(True, "Watcher scheduled task installed.", "AI Memory Watcher")
+    subprocess.run(["schtasks", "/Run", "/TN", task_name], check=True, capture_output=True,
+                   creationflags=background_creationflags(), timeout=30)
+    return InstallResult(True, "Watcher scheduled task installed.", task_name)
 
 
-def _windows_task_status() -> WatcherServiceStatus:
+def _vbs_string(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _windows_task_xml(launcher: Path, identity: str) -> bytes:
+    task = ET.Element("Task", {"version": "1.2", "xmlns": "http://schemas.microsoft.com/windows/2004/02/mit/task"})
+    trigger = ET.SubElement(ET.SubElement(task, "Triggers"), "LogonTrigger")
+    ET.SubElement(trigger, "Enabled").text = "true"
+    ET.SubElement(trigger, "UserId").text = identity
+    principal = ET.SubElement(ET.SubElement(task, "Principals"), "Principal", {"id": "Author"})
+    for key, value in {"UserId": identity, "LogonType": "InteractiveToken", "RunLevel": "LeastPrivilege"}.items():
+        ET.SubElement(principal, key).text = value
+    settings = ET.SubElement(task, "Settings")
+    for key, value in {
+        "MultipleInstancesPolicy": "IgnoreNew", "DisallowStartIfOnBatteries": "false",
+        "StopIfGoingOnBatteries": "false", "StartWhenAvailable": "true",
+        "ExecutionTimeLimit": "PT0S",
+    }.items():
+        ET.SubElement(settings, key).text = value
+    restart = ET.SubElement(settings, "RestartOnFailure")
+    ET.SubElement(restart, "Interval").text = "PT1M"
+    ET.SubElement(restart, "Count").text = "3"
+    action = ET.SubElement(ET.SubElement(task, "Actions", {"Context": "Author"}), "Exec")
+    ET.SubElement(action, "Command").text = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "wscript.exe")
+    ET.SubElement(action, "Arguments").text = subprocess.list2cmdline(["//B", "//Nologo", str(launcher)])
+    return ET.tostring(task, encoding="utf-16", xml_declaration=True)
+
+
+def _windows_task_status(task_name: str = "AI Memory Watcher") -> WatcherServiceStatus:
     result = subprocess.run(
-        ["schtasks", "/Query", "/TN", "AI Memory Watcher", "/FO", "LIST", "/V"],
+        ["schtasks", "/Query", "/TN", task_name, "/XML"],
         text=True,
+        errors="replace",
         capture_output=True,
         check=False,
         creationflags=background_creationflags(),
         timeout=10,
     )
     if result.returncode != 0:
-        return WatcherServiceStatus(False, False, "AI Memory Watcher", (result.stderr or result.stdout).strip())
-    output = result.stdout
+        return WatcherServiceStatus(False, False, task_name, (result.stderr or result.stdout).strip())
+    running = False
+    # The process lock is language-independent and also covers a watcher started
+    # from the interface. Scheduler output is localized on French Windows.
+    state = AppPaths.from_env().state
+    if state.is_dir():
+        try:
+            with FileLock(str(state / "watcher.lock"), timeout=0):
+                pass
+        except Timeout:
+            running = True
     return WatcherServiceStatus(
         installed=True,
-        running="Status:" in output and "Running" in output,
-        path="AI Memory Watcher",
-        detail=output.strip()[:500],
+        running=running,
+        path=task_name,
     )
 
 
@@ -508,6 +563,12 @@ def _validate_cli_runtime(executable: Path) -> None:
 
 
 def _copy_runtime_file(source: Path, destination: Path) -> bool:
+    # Windows retains running image files; remove only our unlocked old copies.
+    for previous in destination.parent.glob(f".{destination.name}.*.previous"):
+        try:
+            previous.unlink()
+        except OSError:
+            pass
     try:
         if source.resolve() == destination.resolve():
             return False
@@ -519,5 +580,24 @@ def _copy_runtime_file(source: Path, destination: Path) -> bool:
     temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
     shutil.copy2(source, temporary)
     temporary.chmod(0o755)
-    os.replace(temporary, destination)
+    try:
+        os.replace(temporary, destination)
+    except PermissionError:
+        if sys.platform != "win32" or not destination.is_file():
+            temporary.unlink(missing_ok=True)
+            raise
+        previous = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.previous")
+        try:
+            os.replace(destination, previous)
+            try:
+                os.replace(temporary, destination)
+            except OSError:
+                os.replace(previous, destination)
+                raise
+        finally:
+            temporary.unlink(missing_ok=True)
+        try:
+            previous.unlink()
+        except OSError:
+            pass
     return True

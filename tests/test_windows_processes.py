@@ -18,16 +18,17 @@ def test_background_flags(platform, expected, monkeypatch):
     assert background_creationflags() == expected
 
 
-def test_windows_scheduler_commands_are_hidden(monkeypatch):
+def test_windows_scheduler_commands_are_hidden(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
-    run = Mock(return_value=SimpleNamespace(returncode=0, stdout="Status: Running", stderr=""))
+    monkeypatch.setenv("AI_MEMORY_HOME", str(tmp_path))
+    run = Mock(return_value=SimpleNamespace(returncode=0, stdout='"test\\user","S-1-5-21-123-456-789-1000"', stderr=""))
     monkeypatch.setattr(installer.subprocess, "run", run)
     monkeypatch.setattr(installer, "resolve_aimemory_command", lambda: [r"C:\AI Memory\ai-memory-cli.exe"])
     assert installer._install_windows_task(10).changed
     for _ in range(5):
         assert installer._windows_task_status().installed
     installer._validate_cli_runtime(Path("fake.exe"))
-    assert len(run.call_args_list) == 8
+    assert len(run.call_args_list) == 10
     for call in run.call_args_list:
         assert call.kwargs["creationflags"] == 0x08000000
         assert call.kwargs["timeout"] > 0
