@@ -164,6 +164,7 @@ class MemoryDatabase:
                     updated_at TEXT NOT NULL, digest TEXT NOT NULL,
                     PRIMARY KEY (conversation_id, field)
                 );
+                CREATE TABLE IF NOT EXISTS local_conversations (conversation_id TEXT PRIMARY KEY);
                 """
             )
             # FTS UNINDEXED identifiers still require a full scan (including old
@@ -422,10 +423,18 @@ class MemoryDatabase:
         self.initialize()
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(
-                "SELECT d.id, d.name, d.id = ? AS is_current, COUNT(c.id) AS conversation_count, "
+                "SELECT d.id, d.name, (d.id = ? OR EXISTS(SELECT 1 FROM local_conversations lc "
+                "JOIN conversations local ON local.id=lc.conversation_id WHERE local.device_id=d.id)) AS is_current, COUNT(c.id) AS conversation_count, "
                 "MAX(c.updated_at) AS latest_conversation_at FROM devices d "
                 "JOIN conversations c ON c.device_id = d.id GROUP BY d.id ORDER BY d.name, d.id",
                 (current_device_id,))]
+
+    def mark_local_conversations(self, conversation_ids) -> None:
+        self.initialize()
+        with self.connect() as conn:
+            known = {row[0] for row in conn.execute("SELECT conversation_id FROM local_conversations")}
+            conn.executemany("INSERT OR IGNORE INTO local_conversations VALUES (?)",
+                             ((cid,) for cid in set(conversation_ids) - known if cid))
 
     def conversation_page(self, conversation_id: str, offset: int = 0, limit: int = 20,
                           latest: bool = False, include_tools: bool = False,
@@ -665,8 +674,8 @@ def _device_filter(device, current_device_id, prefix=""):
     if device in {"other", "current"}:
         if not current_device_id:
             raise ValueError("Current device identity is required")
-        operator = "!=" if device == "other" else "="
-        return f" AND {prefix}device_id {operator} ?", [current_device_id]
+        expression = f"({prefix}device_id = ? OR {prefix}id IN (SELECT conversation_id FROM local_conversations))"
+        return f" AND {'NOT ' if device == 'other' else ''}{expression}", [current_device_id]
     return (f" AND {prefix}device_id IN (SELECT id FROM devices WHERE id=? OR name=? COLLATE NOCASE)",
             [device, device])
 

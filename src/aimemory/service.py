@@ -208,6 +208,7 @@ class MemoryService:
             except Exception as exc:
                 errors.append({"path": str(session.path), "error": str(exc)})
             write_json(manifest_path, manifest)
+        self.db.mark_local_conversations(entry.get("conversation_id") for entry in manifest.values() if isinstance(entry, dict))
         return ImportResult(scanned=len(sessions), imported=imported, skipped=skipped, errors=errors)
 
     def _repair_codex_messages(self, batch_size: int = 3) -> None:

@@ -141,3 +141,16 @@ def test_catalog_converges_and_rejects_corruption(tmp_path):
     write_json(c.paths.state / "cloud.json", {"provider": "local-folder", "root": str(tmp_path / "cloud")})
     with pytest.raises(ValueError, match="checksum"):
         c.sync_now()
+
+
+def test_other_devices_does_not_include_local_history_after_hostname_changes(tmp_path):
+    from aimemory.models import DeviceIdentity
+    service = memory(tmp_path / "memory")
+    session(tmp_path / "codex", "local")
+    service.import_codex(tmp_path / "codex")
+    local = service.get_conversation(service.list_conversations()[0]["id"])
+    remote = replace(local, id="remote", source_session_id="remote", device=DeviceIdentity("other-mac", "MacBook Air"))
+    service.accept_conversation(remote)
+    assert [row["id"] for row in service.db.list_conversations(device="current", current_device_id="new-hostname-id")] == [local.id]
+    assert [row["id"] for row in service.db.list_conversations(device="other", current_device_id="new-hostname-id")] == ["remote"]
+    assert service.db.search("hello", device="other", current_device_id="new-hostname-id")[0]["id"] == "remote"
