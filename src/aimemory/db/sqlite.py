@@ -350,7 +350,7 @@ class MemoryDatabase:
                 p.name AS project_name,
                 p.cwd AS project_path,
                 {NAME_SQL},
-                (SELECT substr(m.content, 1, 400) FROM messages m
+                (SELECT substr(m.content, 1, 1000) FROM messages m
                  WHERE m.conversation_id = c.id AND m.role = 'user'
                  ORDER BY m.ordinal DESC LIMIT 1) AS latest_user_message,
                 substr(snippet(conversations_fts, 4, '[', ']', '...', 24), 1, 600) AS snippet,
@@ -369,7 +369,10 @@ class MemoryDatabase:
         filters.extend([*device_filters, *ids, query.strip(), query.strip()])
         params.extend([*filters, max(1, min(limit, 1000)), max(0, offset)])
         with self.connect() as conn:
-            return [dict(row) for row in conn.execute(sql, params).fetchall()]
+            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+            for row in rows:
+                row["latest_user_message"] = _conversation_preview(row.get("latest_user_message"))
+            return rows
 
     def list_conversations(
         self,

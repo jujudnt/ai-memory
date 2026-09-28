@@ -214,7 +214,7 @@ def test_theme_preference_is_stored_and_reported(desktop_server):
 def test_projects_search_and_bundled_fonts(desktop_server, tmp_path):
     sessions = tmp_path / "codex" / "sessions"
     sessions.mkdir(parents=True)
-    for name, cwd, text, stamp in [("a", "alpha", "retrouver la migration iCloud", "2026-09-20T10:00:00Z"),
+    for name, cwd, text, stamp in [("a", "alpha", "# Files mentioned by the user:\n\n## My request:\nretrouver la migration iCloud", "2026-09-20T10:00:00Z"),
                                    ("b", "alpha", "corriger le tableau", "2026-09-22T10:00:00Z"),
                                    ("c", "beta", "preparer la synthese", "2026-09-21T10:00:00Z")]:
         (tmp_path / cwd).mkdir(exist_ok=True)
