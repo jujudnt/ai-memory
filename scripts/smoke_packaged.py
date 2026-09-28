@@ -79,7 +79,12 @@ def main() -> None:
         run("sync", environment=other)
         run("sync")
         assert "second-device-sync-marker" in run("search", "second-device-sync-marker")
+        def inventory():
+            remote = Path(cloud["root"])
+            return {str(path.relative_to(remote)): path.stat().st_size for path in remote.rglob("*") if path.is_file()}
+        before = inventory()
         run("sync")
+        assert inventory() == before, "An unchanged sync must not duplicate cloud objects"
         for environment in (env, other):
             status = json.loads(run("doctor", environment=environment))
             assert status["conversation_count"] == 2, status

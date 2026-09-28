@@ -142,7 +142,8 @@ def test_native_scheduled_watcher_runs_hidden_with_correct_environment(tmp_path,
         "import ctypes, json, os, time\nfrom pathlib import Path\nfrom filelock import FileLock\n"
         "home = Path(os.environ['AI_MEMORY_HOME'])\n"
         "with FileLock(str(home / 'state/watcher.lock')):\n"
-        "    (home / 'probe.json').write_text(json.dumps({'console': int(ctypes.windll.kernel32.GetConsoleWindow() or 0), 'codex': os.environ['CODEX_HOME']}))\n"
+        "    console = ctypes.windll.kernel32.GetConsoleWindow()\n"
+        "    (home / 'probe.json').write_text(json.dumps({'console_visible': bool(ctypes.windll.user32.IsWindowVisible(console)), 'codex': os.environ['CODEX_HOME']}))\n"
         "    while not (home / 'stop').exists(): time.sleep(.1)\n", encoding="utf-8")
     monkeypatch.setattr(installer, "resolve_aimemory_command", lambda: [sys.executable, str(probe)])
     try:
@@ -153,7 +154,9 @@ def test_native_scheduled_watcher_runs_hidden_with_correct_environment(tmp_path,
             time.sleep(.2)
         assert result_path.exists(), "Scheduled watcher did not start on the Windows runner"
         data = json.loads(result_path.read_text())
-        assert data == {"console": 0, "codex": str(tmp_path / "Codex space")}
+        # WScript hides the console at creation; unlike CREATE_NO_WINDOW it can
+        # still allocate an invisible console handle for the child process.
+        assert data == {"console_visible": False, "codex": str(tmp_path / "Codex space")}
         assert installer._windows_task_status(task_name).running
     finally:
         (tmp_path / "memory/stop").touch()
