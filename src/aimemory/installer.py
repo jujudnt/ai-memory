@@ -618,6 +618,8 @@ def _copy_runtime_file(source: Path, destination: Path) -> bool:
             return False
     except OSError:
         pass
+    # copy2 can preserve the same size/mtime signature after replacement.
+    filecmp.clear_cache()
     if destination.exists() and filecmp.cmp(source, destination, shallow=False):
         return False
     destination.parent.mkdir(parents=True, exist_ok=True)

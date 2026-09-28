@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import os
+import sys
 
 
 LOCAL_FOLDER_PROVIDERS = {"local-folder", "icloud-drive", "onedrive", "dropbox"}
@@ -19,7 +22,8 @@ PROVIDER_LABELS = {
 
 
 def provider_label(provider: str | None) -> str:
-    return PROVIDER_LABELS.get(provider or "", "Sauvegarde cloud")
+    label = PROVIDER_LABELS.get(provider or "", "Sauvegarde cloud")
+    return label.replace("du Mac", "du PC") if sys.platform == "win32" else label
 
 
 def resolve_folder_root(provider: str, folder: str = "") -> Path:
@@ -27,6 +31,13 @@ def resolve_folder_root(provider: str, folder: str = "") -> Path:
         if not folder.strip():
             raise ValueError("Choisissez un dossier de synchronisation.")
         return Path(folder).expanduser().resolve()
+    if sys.platform == "win32" and provider in {"icloud-drive", "onedrive", "dropbox"}:
+        roots = _windows_cloud_roots(provider)
+        if len(roots) > 1:
+            raise ValueError("Plusieurs dossiers cloud sont disponibles. Choisissez le compte voulu via Dossier synchronisé.")
+        if not roots:
+            raise ValueError(f"{provider_label(provider)} est introuvable. Connectez le client cloud ou choisissez son dossier via Dossier synchronisé.")
+        return roots[0] / "AI-Memory"
     if provider == "icloud-drive":
         root = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
         if not root.is_dir():
@@ -50,6 +61,30 @@ def resolve_folder_root(provider: str, folder: str = "") -> Path:
         root = base / "AI-Memory"
         return root.resolve()
     raise ValueError("Destination cloud inconnue.")
+
+
+def _windows_cloud_roots(provider: str) -> list[Path]:
+    home = Path.home()
+    candidates: list[Path] = []
+    if provider == "icloud-drive":
+        candidates = [home / "iCloudDrive", home / "iCloud Drive"]
+    elif provider == "onedrive":
+        candidates = [Path(os.environ[key]) for key in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial") if os.environ.get(key)]
+        candidates.extend(home.glob("OneDrive*"))
+    elif provider == "dropbox":
+        # Dropbox documents info.json for moved and business-account folders.
+        for key in ("LOCALAPPDATA", "APPDATA"):
+            if not os.environ.get(key):
+                continue
+            try:
+                data = json.loads((Path(os.environ[key]) / "Dropbox/info.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict):
+                candidates.extend(Path(account["path"]) for account in data.values()
+                                  if isinstance(account, dict) and isinstance(account.get("path"), str) and account["path"])
+        candidates.append(home / "Dropbox")
+    return sorted({path.resolve() for path in candidates if path.is_dir()})
 
 
 def validate_sync_root(root: Path, home: Path) -> None:

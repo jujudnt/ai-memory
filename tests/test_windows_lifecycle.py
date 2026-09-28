@@ -83,6 +83,8 @@ def test_running_runtime_can_be_replaced_and_old_copy_cleaned(tmp_path, monkeypa
     source, destination = tmp_path / "new.exe", tmp_path / "installed.exe"
     source.write_bytes(b"new")
     destination.write_bytes(b"old")
+    os.utime(source, (1700000000, 1700000000))
+    os.utime(destination, (1700000000, 1700000000))
     replace = os.replace
     unlink = Path.unlink
     def locked_replace(src, dst):
