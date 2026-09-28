@@ -133,17 +133,18 @@ def test_native_update_while_previous_runtime_is_running(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Requires Windows Task Scheduler and WScript")
 def test_native_scheduled_watcher_runs_hidden_with_correct_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv("AI_MEMORY_HOME", str(tmp_path / "memory"))
+    home = tmp_path / "memory with spaces"
+    monkeypatch.setenv("AI_MEMORY_HOME", str(home))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "Codex space"))
     task_name = f"AI Memory Test {uuid.uuid4().hex}"
-    probe = tmp_path / "probe.py"
-    result_path = tmp_path / "memory/probe.json"
+    probe = tmp_path / "probe with spaces.py"
+    result_path = home / "probe.json"
     probe.write_text(
         "import ctypes, json, os, time\nfrom pathlib import Path\nfrom filelock import FileLock\n"
         "home = Path(os.environ['AI_MEMORY_HOME'])\n"
         "with FileLock(str(home / 'state/watcher.lock')):\n"
         "    console = ctypes.windll.kernel32.GetConsoleWindow()\n"
-        "    (home / 'probe.json').write_text(json.dumps({'console_visible': bool(ctypes.windll.user32.IsWindowVisible(console)), 'codex': os.environ['CODEX_HOME']}))\n"
+        "    (home / 'probe.json').write_text(json.dumps({'pid': os.getpid(), 'console_visible': bool(ctypes.windll.user32.IsWindowVisible(console)), 'codex': os.environ['CODEX_HOME']}))\n"
         "    while not (home / 'stop').exists(): time.sleep(.1)\n", encoding="utf-8")
     monkeypatch.setattr(installer, "resolve_aimemory_command", lambda: [sys.executable, str(probe)])
     try:
@@ -156,10 +157,20 @@ def test_native_scheduled_watcher_runs_hidden_with_correct_environment(tmp_path,
         data = json.loads(result_path.read_text())
         # WScript hides the console at creation; unlike CREATE_NO_WINDOW it can
         # still allocate an invisible console handle for the child process.
-        assert data == {"console_visible": False, "codex": str(tmp_path / "Codex space")}
+        assert data["console_visible"] is False
+        assert data["codex"] == str(tmp_path / "Codex space")
         assert installer._windows_task_status(task_name).running
+        result_path.unlink()
+        assert installer._install_windows_task(1, task_name).changed
+        deadline = time.monotonic() + 30
+        while not result_path.exists() and time.monotonic() < deadline:
+            time.sleep(.2)
+        assert result_path.exists(), "Reinstall did not restart the scheduled watcher"
+        restarted = json.loads(result_path.read_text())
+        assert restarted["pid"] != data["pid"]
+        assert restarted["console_visible"] is False
     finally:
-        (tmp_path / "memory/stop").touch()
+        (home / "stop").touch()
         subprocess.run(["schtasks", "/End", "/TN", task_name], capture_output=True, timeout=20,
                        creationflags=0x08000000)
         subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"], capture_output=True, timeout=20,
