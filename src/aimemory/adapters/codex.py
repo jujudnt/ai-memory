@@ -26,6 +26,7 @@ class CodexAdapter:
     def __init__(self, codex_home: Path | None = None, device_id: str | None = None):
         self.codex_home = codex_home or default_codex_home()
         self.thread_metadata = _load_thread_metadata(self.codex_home)
+        self.thread_names = _load_thread_names(self.codex_home, self.thread_metadata)
         self.codex_projects = _load_codex_projects(self.codex_home)
         self.device = DeviceIdentity(
             id=device_id or _stable_device_id(),
@@ -227,6 +228,10 @@ def _session_id_from_path(path: Path) -> str:
     return path.stem
 
 
+def conversation_names(adapter: "CodexAdapter") -> dict[str, str]:
+    return {_conversation_id(adapter.source, thread_id): name for thread_id, name in adapter.thread_names.items()}
+
+
 def _conversation_id(source: str, source_session_id: str) -> str:
     digest = hashlib.sha256(f"{source}:{source_session_id}".encode("utf-8")).hexdigest()
     return str(uuid.UUID(digest[:32]))
@@ -251,6 +256,7 @@ def _load_thread_metadata(codex_home: Path) -> dict[str, dict[str, Any]]:
             "model_provider",
             "cwd",
             "title",
+            "name",
             "created_at",
             "updated_at",
             "project_id",
@@ -272,6 +278,28 @@ def _load_thread_metadata(codex_home: Path) -> dict[str, dict[str, Any]]:
         if data.get("rollout_path"):
             result[str(data["rollout_path"])] = data
     return result
+
+
+def _load_thread_names(codex_home: Path, thread_metadata: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Names shown in the Codex sidebar, keyed by thread id. The state database wins;
+    session_index.jsonl (append-only, latest line wins) covers older threads."""
+    names: dict[str, str] = {}
+    try:
+        with (codex_home / "session_index.jsonl").open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and isinstance(record.get("thread_name"), str) and record.get("id"):
+                    names[str(record["id"])] = record["thread_name"]
+    except OSError:
+        pass
+    for thread_id, meta in thread_metadata.items():
+        if meta.get("id") == thread_id and isinstance(meta.get("name"), str):
+            names[thread_id] = meta["name"]
+    cleaned = {thread_id: " ".join(name.split())[:4096] for thread_id, name in names.items()}
+    return {thread_id: name for thread_id, name in cleaned.items() if name}
 
 
 def _load_codex_projects(codex_home: Path) -> dict[str, dict[str, Any]]:

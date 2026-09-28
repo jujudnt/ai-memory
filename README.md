@@ -172,6 +172,10 @@ Le libellé **Codex Desktop** ou **Codex VS Code** repose sur l'origine explicit
 
 Chaque machine reconstruit son propre index de recherche à partir des archives téléchargées. AI Memory ne réinjecte pas les conversations dans la barre latérale native de Codex ou Claude ; elles restent consultables via AI Memory et le MCP.
 
+La vue **Conversations** rassemble les conversations de cet ordinateur et celles reçues des autres appareils du même cloud. Les filtres **Tous les appareils / Autres appareils / Cet ordinateur** et **Environnement** permettent de les retrouver. Chaque ligne montre le titre personnalisé lorsqu'il existe, le projet, le client (Codex Desktop, Claude Code, VS Code...) et le nom de l'ordinateur d'origine. Cliquez sur une conversation pour lire ses messages ; **Afficher la suite** permet de parcourir toute la bibliothèque, pas seulement les dernières conversations.
+
+Les noms renommés dans Codex et les changements de projet sont transmis dans de petites fiches `catalog/`, indépendamment des messages : renommer ne renvoie pas toute l'archive. Ils restent recherchables via le MCP après réception. **Installez cette version sur chaque ordinateur** pour que les noms présents uniquement dans son Codex soient publiés. La vue utilise l'index local de la bibliothèque reçue, fonctionne hors ligne et indique l'état de synchronisation ; elle ne prétend pas afficher des conversations que l'autre appareil n'a pas encore envoyées.
+
 ```mermaid
 flowchart LR
     M1[Mac 1 : archives] <--> C[Cloud : dossier partagé]
@@ -310,6 +314,7 @@ export AI_MEMORY_HOME=/chemin/vers/ai-memory
 | `archive/sources/<source>/sessions` | Version normalisée courante des conversations |
 | `archive/raw` | Originaux compressés en attente de confirmation cloud |
 | `archive/snapshots` | Révisions normalisées immuables en attente de confirmation |
+| `archive/catalog` | Titres et projets versionnés, synchronisés séparément des messages |
 | `db/memory.sqlite` | Métadonnées et index plein texte FTS5 |
 | `cache/incoming` | Zone temporaire de vérification des téléchargements |
 | `credentials` | Autorisations cloud locales |
@@ -527,6 +532,10 @@ The **Codex Desktop** or **Codex VS Code** label uses the explicit origin record
 
 Each machine builds its own search index from downloaded archives. AI Memory does not restore conversations into the native Codex or Claude sidebar; they remain available through AI Memory and MCP.
 
+The **Conversations** view combines conversations from this computer with those received from other devices using the same cloud destination. Filter by **All devices / Other devices / This computer** and environment. Each row shows the custom title when available, project, client (Codex Desktop, Claude Code, VS Code...) and originating computer. Open a conversation to read its messages; **Show more** browses the whole library, not just recent conversations.
+
+Codex renames and project changes travel as small `catalog/` records, independently of messages: a rename does not re-upload the conversation archive. Names remain searchable through MCP after reception. **Update every computer** so names stored only in its Codex installation can be published. The view uses the local index of the received library, works offline and displays synchronization status; it cannot show conversations the other device has not uploaded yet.
+
 ```mermaid
 flowchart LR
     M1[Mac 1: archives] <--> C[Cloud: shared folder]
@@ -665,6 +674,7 @@ export AI_MEMORY_HOME=/path/to/ai-memory
 | `archive/sources/<source>/sessions` | Current normalized conversation revisions |
 | `archive/raw` | Compressed originals awaiting cloud confirmation |
 | `archive/snapshots` | Immutable normalized revisions awaiting confirmation |
+| `archive/catalog` | Versioned titles and projects, synchronized independently of messages |
 | `db/memory.sqlite` | Metadata and FTS5 full-text index |
 | `cache/incoming` | Temporary download verification area |
 | `credentials` | Local cloud authorization |

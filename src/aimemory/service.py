@@ -5,12 +5,14 @@ import hashlib
 import json
 import time
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from filelock import FileLock
 
 from aimemory.adapters import ClaudeAdapter, CodexAdapter, VSCodeAdapter
+from aimemory.adapters.codex import _identify_codex_project
 from aimemory.adapters.base import ConversationSourceAdapter
 from aimemory.adapters.codex_messages import normalize_codex_messages, NORMALIZATION_VERSION
 from aimemory.archive import JsonArchive
@@ -54,7 +56,11 @@ class MemoryService:
             self._repair_codex_labels()
             self._repair_codex_messages()
             self._repair_compact_index()
-            return self._import_adapter(CodexAdapter(codex_home=codex_home), force=force)
+            self._repair_conversation_names()
+            adapter = CodexAdapter(codex_home=codex_home)
+            result = self._import_adapter(adapter, force=force)
+            self._refresh_codex_catalog(adapter)
+            return result
 
     def import_claude(self, claude_home: Path | None = None, force: bool = False) -> ImportResult:
         with self.lock:
@@ -69,14 +75,59 @@ class MemoryService:
             self._repair_codex_labels()
             self._repair_codex_messages()
             self._repair_compact_index()
+            self._repair_conversation_names()
             result = ImportResult(scanned=0, imported=0, skipped=0, errors=[])
-            for adapter in (CodexAdapter(codex_home=codex_home), ClaudeAdapter(), VSCodeAdapter()):
+            codex = CodexAdapter(codex_home=codex_home)
+            for adapter in (codex, ClaudeAdapter(), VSCodeAdapter()):
                 partial = self._import_adapter(adapter, force=force)
                 result.scanned += partial.scanned
                 result.imported += partial.imported
                 result.skipped += partial.skipped
                 result.errors.extend(partial.errors)
+            self._refresh_codex_catalog(codex)
             return result
+
+    def _refresh_codex_catalog(self, adapter: CodexAdapter) -> None:
+        from aimemory.catalog import publish
+        observed_path = self.paths.state / "catalog-observed.json"
+        observed = read_json(observed_path)
+        changed = False
+        index = adapter.codex_home / "session_index.jsonl"
+        db_path = adapter.codex_home / "state_5.sqlite"
+        name_stamps = {}
+        if index.exists():
+            with index.open(encoding="utf-8") as stream:
+                for line in stream:
+                    try:
+                        item = json.loads(line)
+                        name_stamps[item["id"]] = datetime.fromisoformat(item["updated_at"].replace("Z", "+00:00")).timestamp()
+                    except (ValueError, KeyError, TypeError, AttributeError):
+                        continue
+        fallback_stamp = max((path.stat().st_mtime for path in (index, db_path, db_path.with_name(db_path.name + "-wal")) if path.exists()), default=0)
+        with self.db.connect() as conn:
+            rows = conn.execute("SELECT id, source_session_id FROM conversations WHERE source IN (" +
+                                ",".join("?" for _ in CODEX_SOURCES) + ")", tuple(CODEX_SOURCES)).fetchall()
+        for row in rows:
+            cid, tid = row
+            meta = adapter.thread_metadata.get(tid, {})
+            values = {}
+            if adapter.thread_names.get(tid):
+                values["name"] = adapter.thread_names[tid]
+            project = _identify_codex_project(meta.get("cwd"), meta.get("project_id"), adapter.codex_projects)
+            if project:
+                values["project"] = asdict(project)
+            for field_name, value in values.items():
+                key = f"{cid}:{field_name}"
+                previous = observed.get(key, {})
+                if previous.get("value") == value:
+                    continue
+                stamp = name_stamps.get(tid, fallback_stamp) if field_name == "name" and not meta.get("name") else fallback_stamp
+                stamp = max(stamp, previous.get("timestamp", 0) + .000001)
+                publish(self, cid, field_name, value, stamp)
+                observed[key] = {"value": value, "timestamp": stamp}
+                changed = True
+        if changed:
+            write_json(observed_path, observed)
 
     def _repair_codex_labels(self) -> None:
         marker = self.paths.state / "codex-client-labels-v1.json"
@@ -202,6 +253,15 @@ class MemoryService:
         self.db.upsert_conversation(conversation, path)
         return True
 
+    def _repair_conversation_names(self, batch_size: int = 20) -> int:
+        entries = self.db.pending_name_entries(batch_size)
+        for entry in entries:
+            try:
+                self.db.record_title_name(self.archive.read(Path(entry["archive_path"])))
+            except (OSError, ValueError, KeyError):
+                continue  # A missing archive is repaired elsewhere; retry later.
+        return len(entries)
+
     def _repair_compact_index(self, batch_size: int = 3) -> int:
         entries = self.db.pending_compact_entries(batch_size)
         for entry in entries:
@@ -224,6 +284,11 @@ class MemoryService:
         return conversation
 
     def rebuild_from_archives(self) -> int:
+        for path in sorted((self.paths.archive / "catalog").glob("*/*.json")):
+            payload = path.read_bytes()
+            if hashlib.sha256(payload).hexdigest() != path.stem:
+                raise ValueError("Conversation metadata checksum mismatch")
+            self.db.apply_catalog(json.loads(payload), path.stem)
         count = 0
         for path in self.archive.iter_archives():
             self.index_archive(path)

@@ -1,6 +1,7 @@
 """Disposable UI fixture server. Never opens accounts, files or installed services."""
 from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
+from urllib.parse import parse_qs
 
 from aimemory.desktop import Handler
 from aimemory.state import now
@@ -22,13 +23,49 @@ STATUS = {
                                                     "latest_user_message": "Vérifier les boutons de connexion et la reprise des transferts.", "updated_at": now()}],
 }
 
+CONVERSATIONS = [
+    {"id": f"preview-{index}", "name": f"Sabai - conversation {index + 1}", "title": "Ancien premier message",
+     "source": "codex-desktop" if index % 2 else "claude-code", "project_name": "Sabai", "project_id": "sabai",
+     "device_id": "air" if index % 2 else "pro", "device_name": "MacBook Air Julia" if index % 2 else "MacBook Pro Julia",
+     "updated_at": now(), "latest_user_message": "Vérifier les échanges entre les deux ordinateurs."}
+    for index in range(65)
+]
+STATUS.update(conversation_count=65, archive_count=65, project_count=1, recent_conversations=CONVERSATIONS[:25],
+              job={}, sync_active=False, sync={"status": "synced", "last_success_at": now()},
+              health={"state": "running", "label": "Collecte en continu"},
+              watcher={"running": True, "last_success_at": now()})
+
 
 class PreviewHandler(Handler):
     state = SimpleNamespace(token="preview-only")
 
     def do_GET(self):
+        route, _, query = self.path.partition("?")
+        params = parse_qs(query)
         if self.path == "/api/status":
             self._send_json(STATUS)
+        elif route == "/api/conversations":
+            rows = CONVERSATIONS
+            device = params.get("device", [""])[0]
+            if device:
+                rows = [row for row in rows if row["device_id"] == {"other": "air", "current": "pro"}.get(device, device)]
+            source = params.get("source", [""])[0]
+            if source:
+                rows = [row for row in rows if source in row["source"]]
+            text = params.get("q", [""])[0].lower()
+            rows = [row for row in rows if text in row["name"].lower()]
+            offset, limit = int(params.get("offset", ["0"])[0]), int(params.get("limit", ["50"])[0])
+            self._send_json({"conversations": rows[offset:offset+limit], "has_more": len(rows) > offset + limit,
+                             "next_offset": offset + min(limit, len(rows[offset:]))})
+        elif route == "/api/devices":
+            self._send_json({"devices": [{"id": "air", "name": "MacBook Air Julia", "is_current": False},
+                                         {"id": "pro", "name": "MacBook Pro Julia", "is_current": True}]})
+        elif route == "/api/projects":
+            self._send_json({"projects": [{"id": "sabai", "name": "Sabai", "conversation_count": 65, "latest_conversation_at": now()}]})
+        elif route == "/api/conversation":
+            self._send_json({"conversation": {"messages": [{"role": "user", "content": "Retrouve le projet Sabai de mon autre Mac.", "timestamp": now()},
+                                                            {"role": "assistant", "content": "La conversation conserve son titre, son projet et son ordinateur d'origine.", "timestamp": now()}],
+                                               "next_offset": None}})
         else:
             super().do_GET()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -10,6 +11,10 @@ from typing import Any
 
 from aimemory.models import NormalizedConversation
 from aimemory.db.codec import pack_text, unpack_text
+from aimemory.adapters.common import title_from_messages
+from aimemory.sources import CODEX_SOURCES
+
+NAME_SQL = "(SELECT n.name FROM conversation_names n WHERE n.conversation_id = c.id) AS name"
 
 
 class MemoryDatabase:
@@ -145,6 +150,20 @@ class MemoryDatabase:
                 CREATE INDEX IF NOT EXISTS idx_fts_conversation_rows
                 ON fts_conversation_rows(conversation_id);
                 CREATE TABLE IF NOT EXISTS index_migrations (name TEXT PRIMARY KEY);
+
+                -- Names the user gave a conversation, apart from its first message.
+                -- origin "title": explicit title found at indexing (NULL name = none).
+                -- origin "codex": live Codex thread name, refreshed on each import.
+                CREATE TABLE IF NOT EXISTS conversation_names (
+                    conversation_id TEXT PRIMARY KEY,
+                    name TEXT,
+                    origin TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS conversation_metadata (
+                    conversation_id TEXT NOT NULL, field TEXT NOT NULL, value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, digest TEXT NOT NULL,
+                    PRIMARY KEY (conversation_id, field)
+                );
                 """
             )
             # FTS UNINDEXED identifiers still require a full scan (including old
@@ -261,6 +280,13 @@ class MemoryDatabase:
             conn.execute("INSERT INTO fts_conversation_rows VALUES (?, ?)", (fts_cursor.lastrowid, conversation.id))
 
             conn.execute("INSERT OR REPLACE INTO compact_index_versions VALUES (?, 1)", (conversation.id,))
+            if conversation.source not in CODEX_SOURCES:
+                conn.execute(
+                    "INSERT INTO conversation_names VALUES (?, ?, 'title') ON CONFLICT(conversation_id) "
+                    "DO UPDATE SET name = excluded.name WHERE origin = 'title'",
+                    (conversation.id, explicit_title(conversation)),
+                )
+            self._apply_catalog_to_index(conn, conversation.id)
 
             if source_path and file_hash is not None and size is not None and mtime is not None:
                 conn.execute(
@@ -301,7 +327,7 @@ class MemoryDatabase:
         current_device_id: str | None = None,
     ) -> list[dict[str, Any]]:
         self.initialize()
-        sql = """
+        sql = f"""
             SELECT
                 c.id,
                 c.source,
@@ -316,6 +342,7 @@ class MemoryDatabase:
                 d.name AS device_name,
                 p.name AS project_name,
                 p.cwd AS project_path,
+                {NAME_SQL},
                 (SELECT substr(m.content, 1, 400) FROM messages m
                  WHERE m.conversation_id = c.id AND m.role = 'user'
                  ORDER BY m.ordinal DESC LIMIT 1) AS latest_user_message,
@@ -356,7 +383,7 @@ class MemoryDatabase:
         sql += device_clause
         params.extend(device_filters)
         sql = f"""
-            SELECT c.*, d.name AS device_name, p.name AS project_name, p.cwd AS project_path,
+            SELECT c.*, d.name AS device_name, p.name AS project_name, p.cwd AS project_path, {NAME_SQL},
                 (
                     SELECT substr(m.content, 1, 1000)
                     FROM messages m
@@ -407,7 +434,7 @@ class MemoryDatabase:
             conn.execute("BEGIN")
             row = conn.execute(
                 "SELECT c.id, c.source, c.source_session_id, c.title, c.created_at, c.updated_at, "
-                "c.device_id, d.name AS device_name, c.project_id, p.name AS project_name, p.cwd AS project_path "
+                f"c.device_id, d.name AS device_name, c.project_id, p.name AS project_name, p.cwd AS project_path, {NAME_SQL} "
                 "FROM conversations c JOIN devices d ON d.id=c.device_id "
                 "LEFT JOIN projects p ON p.id=c.project_id WHERE c.id=?", (conversation_id,)).fetchone()
             if row is None:
@@ -441,7 +468,8 @@ class MemoryDatabase:
         self.initialize()
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(
-                "SELECT p.*, COUNT(c.id) AS conversation_count FROM projects p "
+                "SELECT p.*, COUNT(c.id) AS conversation_count, "
+                "MAX(COALESCE(c.updated_at, c.created_at)) AS latest_conversation_at FROM projects p "
                 "JOIN conversations c ON c.project_id = p.id GROUP BY p.id ORDER BY p.name, p.id"
             )]
 
@@ -469,6 +497,72 @@ class MemoryDatabase:
         self.initialize()
         with self.connect() as conn:
             return [dict(row) for row in conn.execute("SELECT id, source, archive_path FROM conversations")]
+
+    def pending_name_entries(self, limit: int = 20) -> list[dict]:
+        """Conversations indexed before names were recorded (Codex names come from Codex)."""
+        self.initialize()
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT c.id, c.archive_path FROM conversations c LEFT JOIN conversation_names n "
+                f"ON n.conversation_id = c.id WHERE n.conversation_id IS NULL AND c.source NOT IN "
+                f"({', '.join('?' * len(CODEX_SOURCES))}) ORDER BY c.id LIMIT ?", (*sorted(CODEX_SOURCES), limit))]
+
+    def record_title_name(self, conversation: NormalizedConversation) -> None:
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("INSERT OR IGNORE INTO conversation_names VALUES (?, ?, 'title')",
+                         (conversation.id, explicit_title(conversation)))
+
+    def update_codex_names(self, names: dict[str, str]) -> int:
+        """Store renamed Codex threads; only changed rows are written."""
+        self.initialize()
+        with self.connect() as conn:
+            known = {row[0]: row[1] for row in conn.execute(
+                "SELECT conversation_id, name FROM conversation_names WHERE origin = 'codex'")}
+            changed = [(cid, name) for cid, name in names.items() if known.get(cid) != name]
+            conn.executemany("INSERT OR REPLACE INTO conversation_names VALUES (?, ?, 'codex')", changed)
+        return len(changed)
+
+    def apply_catalog(self, record: dict, digest: str) -> bool:
+        from aimemory.catalog import validate_record
+        validate_record(record)
+        self.initialize()
+        cid, field = record["conversation_id"], record["field"]
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute("SELECT updated_at, digest FROM conversation_metadata WHERE conversation_id=? AND field=?",
+                                    (cid, field)).fetchone()
+            if previous and tuple(previous) >= (record["updated_at"], digest):
+                return False
+            conn.execute("INSERT OR REPLACE INTO conversation_metadata VALUES (?, ?, ?, ?, ?)",
+                         (cid, field, json.dumps(record["value"], ensure_ascii=False), record["updated_at"], digest))
+            self._apply_catalog_to_index(conn, cid)
+        return True
+
+    def _apply_catalog_to_index(self, conn, cid: str) -> None:
+        records = conn.execute("SELECT field, value FROM conversation_metadata WHERE conversation_id=?", (cid,)).fetchall()
+        if not records:
+            return
+        values = {row[0]: json.loads(row[1]) for row in records}
+        if "name" in values:
+            conn.execute("INSERT OR REPLACE INTO conversation_names VALUES (?, ?, 'catalog')", (cid, values["name"]))
+            conn.execute("UPDATE conversations SET title=? WHERE id=?", (values["name"], cid))
+        if "project" in values:
+            project = values["project"]
+            newest = conn.execute("SELECT value FROM conversation_metadata WHERE field='project' "
+                                  "AND json_extract(value, '$.id')=? ORDER BY updated_at DESC, digest DESC LIMIT 1",
+                                  (project["id"],)).fetchone()
+            if newest:
+                project = json.loads(newest[0])
+            conn.execute("INSERT INTO projects(id,name,cwd,git_remote_normalized,default_branch) VALUES (?,?,?,?,?) "
+                         "ON CONFLICT(id) DO UPDATE SET name=excluded.name,cwd=excluded.cwd,git_remote_normalized=excluded.git_remote_normalized,default_branch=excluded.default_branch",
+                         (project["id"], project["name"], project.get("cwd"), project.get("git_remote"), project.get("git_branch")))
+            conn.execute("UPDATE conversations SET project_id=? WHERE id=?", (project["id"], cid))
+        row = conn.execute("SELECT c.title, c.project_id, p.name, p.cwd FROM conversations c LEFT JOIN projects p ON p.id=c.project_id WHERE c.id=?", (cid,)).fetchone()
+        if row:
+            title = "\n".join(str(value) for value in (values.get("name") or row[0], row[2], row[3]) if value)
+            conn.execute("UPDATE conversations_fts SET title=?, project_id=? WHERE rowid IN "
+                         "(SELECT fts_rowid FROM fts_conversation_rows WHERE conversation_id=?)", (title, row[1], cid))
 
     def pending_compact_entries(self, limit: int = 3) -> list[dict]:
         self.initialize()
@@ -503,6 +597,17 @@ class MemoryDatabase:
             "import_count": imports,
             "project_count": projects,
         }
+
+
+def explicit_title(conversation: NormalizedConversation) -> str | None:
+    """A title is a name only when it is not just copied from a user message."""
+    title = " ".join((conversation.title or "").split())
+    if not title or title == title_from_messages(conversation.messages):
+        return None
+    for message in conversation.messages:
+        if message.role == "user" and " ".join(message.content.split()).startswith(title):
+            return None
+    return title
 
 
 def file_hash(path: Path) -> str:

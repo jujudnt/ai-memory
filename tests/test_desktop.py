@@ -182,6 +182,125 @@ def test_windows_manual_watcher_is_hidden_and_keeps_logs(desktop_server, monkeyp
         client.close()
 
 
+def test_theme_preference_is_stored_and_reported(desktop_server):
+    client = HTTPConnection("127.0.0.1", desktop_server.server_port)
+    headers = {"X-AI-Memory-Token": Handler.state.token}
+    try:
+        client.request("GET", "/api/status", headers=headers)
+        response = client.getresponse()
+        assert json.loads(response.read())["theme"] == "system"
+
+        client.request("POST", "/api/theme", body=json.dumps({"theme": "dark"}), headers=headers)
+        response = client.getresponse()
+        assert response.status == 200, response.read()
+        response.read()
+
+        client.request("GET", "/api/status", headers=headers)
+        response = client.getresponse()
+        assert json.loads(response.read())["theme"] == "dark"
+
+        client.request("POST", "/api/theme", body=json.dumps({"theme": "sepia"}), headers=headers)
+        response = client.getresponse()
+        assert response.status == 400
+        response.read()
+
+        client.request("GET", "/api/status", headers=headers)
+        response = client.getresponse()
+        assert json.loads(response.read())["theme"] == "dark"
+    finally:
+        client.close()
+
+
+def test_projects_search_and_bundled_fonts(desktop_server, tmp_path):
+    sessions = tmp_path / "codex" / "sessions"
+    sessions.mkdir(parents=True)
+    for name, cwd, text, stamp in [("a", "alpha", "retrouver la migration iCloud", "2026-09-20T10:00:00Z"),
+                                   ("b", "alpha", "corriger le tableau", "2026-09-22T10:00:00Z"),
+                                   ("c", "beta", "preparer la synthese", "2026-09-21T10:00:00Z")]:
+        (tmp_path / cwd).mkdir(exist_ok=True)
+        records = [{"type": "session_meta", "payload": {"id": name, "cwd": str(tmp_path / cwd)}},
+                   {"type": "response_item", "timestamp": stamp,
+                    "payload": {"type": "message", "role": "user", "content": text}}]
+        (sessions / f"{name}.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    assert Handler.state.service.import_codex(tmp_path / "codex").imported == 3
+    client = HTTPConnection("127.0.0.1", desktop_server.server_port)
+
+    def get(path):
+        client.request("GET", path)
+        response = client.getresponse()
+        assert response.status == 200, path
+        return response.read()
+
+    try:
+        projects = {p["name"]: p for p in json.loads(get("/api/projects"))["projects"]}
+        assert projects["alpha"]["conversation_count"] == 2
+        assert projects["alpha"]["latest_conversation_at"].startswith("2026-09-22")
+        rows = json.loads(get(f"/api/conversations?project={projects['alpha']['id']}"))["conversations"]
+        assert len(rows) == 2 and {r["project_name"] for r in rows} == {"alpha"}
+        rows = json.loads(get("/api/conversations?q=migration&limit=abc"))["conversations"]
+        assert [r["latest_user_message"] for r in rows] == ["retrouver la migration iCloud"]
+        assert json.loads(get("/api/conversations?q=%22"))["conversations"] == []
+        first = json.loads(get("/api/conversations?limit=2"))
+        second = json.loads(get("/api/conversations?limit=2&offset=2"))
+        assert first["has_more"] is True and first["next_offset"] == 2
+        assert second["has_more"] is False
+        assert len({row["id"] for row in first["conversations"] + second["conversations"]}) == 3
+        devices = json.loads(get("/api/devices"))["devices"]
+        assert len(devices) == 1 and devices[0]["is_current"]
+        assert not json.loads(get("/api/conversations?device=other"))["conversations"]
+        assert len(json.loads(get("/api/conversations?device=current&source=codex"))["conversations"]) == 3
+        page = json.loads(get(f"/api/conversation?id={first['conversations'][0]['id']}"))["conversation"]
+        assert page["device_name"] == devices[0]["name"] and page["messages"]
+        assert get("/assets/fonts/archivo.woff2")[:4] == b"wOF2"
+        assert get("/assets/fonts/oswald.woff2")[:4] == b"wOF2"
+        assert b'data-platform="__PLATFORM__"' not in get("/")
+    finally:
+        client.close()
+
+
+def test_folder_picked_in_local_mirror_becomes_cloud_path(tmp_path):
+    from aimemory.folder_picker import cloud_relative_folder
+    root = tmp_path / "iCloud"
+    (root / "Sauvegardes" / "AI").mkdir(parents=True)
+    assert cloud_relative_folder(root / "Sauvegardes" / "AI", [root], "icloud-online") == "Sauvegardes/AI"
+    for outside in (root, tmp_path):
+        with pytest.raises(ValueError):
+            cloud_relative_folder(outside, [root], "icloud-online")
+
+
+def test_choose_folder_endpoint(desktop_server, tmp_path, monkeypatch):
+    from aimemory.state import write_json
+    mirror = tmp_path / "iCloud"
+    (mirror / "Sauvegardes").mkdir(parents=True)
+    calls = []
+    picked = {"value": mirror / "Sauvegardes"}
+    monkeypatch.setattr("aimemory.folder_picker.choose_folder",
+                        lambda prompt, start=None: calls.append(start) or picked["value"])
+    monkeypatch.setattr("aimemory.folder_picker.cloud_sync_roots", lambda provider: [mirror])
+    monkeypatch.setattr("aimemory.folder_picker.picker_supported", lambda: True)
+    headers = {"X-AI-Memory-Token": Handler.state.token}
+    client = HTTPConnection("127.0.0.1", desktop_server.server_port)
+
+    def post(body):
+        client.request("POST", "/api/choose-folder", body=json.dumps(body), headers=headers)
+        response = client.getresponse()
+        return response.status, json.loads(response.read())
+
+    try:
+        assert post({"purpose": "backup"})[0] == 400  # no destination yet
+        write_json(Handler.state.service.paths.state / "cloud.json", {"provider": "icloud-online", "root": "AI-Memory"})
+        client.request("GET", "/api/status")
+        assert json.loads(client.getresponse().read())["backup_folder_picker"] is True
+        assert post({"purpose": "backup"}) == (200, {"path": "Sauvegardes"})
+        assert calls[-1] == mirror  # AI-Memory does not exist locally, so the dialog opens at the root
+        picked["value"] = None
+        assert post({"purpose": "backup"}) == (200, {"path": None})  # cancelled
+        picked["value"] = tmp_path / "ailleurs"
+        assert post({"purpose": "connect"}) == (200, {"path": str(tmp_path / "ailleurs")})
+    finally:
+        client.close()
+
+
 def test_desktop_assets_explain_multi_client_mcp_and_two_step_icloud():
     html = Path("src/aimemory/assets/desktop.html").read_text(encoding="utf-8")
     script = Path("src/aimemory/assets/desktop.js").read_text(encoding="utf-8")

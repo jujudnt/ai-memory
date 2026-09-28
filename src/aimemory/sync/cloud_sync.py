@@ -27,7 +27,7 @@ from aimemory.state import atomic_write, now, read_json, write_json
 from aimemory.sources import CODEX_SOURCES
 
 OBJECT_PATTERN = re.compile(
-    r"(?:snapshots/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json\.(?:gz|zst)|" + RAW_PATTERN + ")"
+    r"(?:catalog/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json|snapshots/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.json\.(?:gz|zst)|" + RAW_PATTERN + ")"
 )
 
 
@@ -174,7 +174,7 @@ class CloudSync:
                 downloads = sorted(
                     (path for path in usable_remote_objects
                      if path not in known or (pull_only and not (self.paths.archive / path).is_file())),
-                    key=lambda path: (not path.startswith("snapshots/"), path),
+                    key=lambda path: (0 if path.startswith("catalog/") else 1 if path.startswith("snapshots/") else 2, path),
                 )
                 confirmed_before = len(known)
                 for index, relative_string in enumerate(downloads, start=1):
@@ -202,7 +202,19 @@ class CloudSync:
                     _check_download_space(self.paths)
                     if not path.is_file():
                         remote.download(relative_string, path)
-                    if relative.parts[0] == "snapshots":
+                    if relative.parts[0] == "catalog":
+                        if path.stat().st_size > 65536:
+                            raise ValueError("Conversation metadata is too large")
+                        payload = path.read_bytes()
+                        if hashlib.sha256(payload).hexdigest() != path.stem:
+                            path.unlink()
+                            raise ValueError("Conversation metadata checksum mismatch")
+                        record = json.loads(payload)
+                        if record.get("conversation_id") != relative.parts[1]:
+                            raise ValueError("Conversation metadata identity mismatch")
+                        with self.service.lock.acquire(timeout=60):
+                            self.service.db.apply_catalog(record, path.stem)
+                    elif relative.parts[0] == "snapshots":
                         payload = path.read_bytes()
                         if path == archived and hashlib.sha256(payload).hexdigest() != path.name.split(".")[0]:
                             # Do not trust a corrupt local candidate or discard it
@@ -498,7 +510,7 @@ def _iter_local_objects(
                 continue
             seen.add(relative)
             yield relative, target
-    for category in ("snapshots", "raw"):
+    for category in ("catalog", "snapshots", "raw"):
         for path in sorted((archive / category).rglob("*")):
             if path.is_file() and not path.is_symlink() and not path.name.startswith("."):
                 relative = path.relative_to(archive).as_posix()

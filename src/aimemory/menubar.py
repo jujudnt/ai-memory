@@ -100,6 +100,36 @@ def _set_windows_login(enabled: bool, state_path: Path) -> None:
     write_json(state_path / "desktop-preferences.json", {"login_enabled": enabled})
 
 
+LAYERS = (  # The app glyph, in its 24-unit design grid.
+    ((12, 2.6), (20.6, 7.3), (12, 12), (3.4, 7.3)),
+    ((3.4, 11.9), (12, 16.6), (20.6, 11.9)),
+    ((3.4, 16.1), (12, 20.8), (20.6, 16.1)),
+)
+
+
+def layers_template(AppKit, alpha: float = 1.0):
+    """Monochrome app glyph; macOS tints template images like other status icons."""
+    def draw(rect):
+        AppKit.NSColor.colorWithWhite_alpha_(0, alpha).setStroke()
+        for index, points in enumerate(LAYERS):
+            path = AppKit.NSBezierPath.bezierPath()
+            path.setLineWidth_(1.5)
+            path.setLineCapStyle_(AppKit.NSLineCapStyleRound)
+            path.setLineJoinStyle_(AppKit.NSLineJoinStyleRound)
+            path.moveToPoint_(tuple(value * 0.75 for value in points[0]))
+            for point in points[1:]:
+                path.lineToPoint_(tuple(value * 0.75 for value in point))
+            if index == 0:
+                path.closePath()
+            path.stroke()
+        return True
+
+    icon = AppKit.NSImage.imageWithSize_flipped_drawingHandler_((18, 18), True, draw)
+    icon.setTemplate_(True)
+    icon.setAccessibilityDescription_("AI Memory")
+    return icon
+
+
 def run_menubar(service, url: str) -> None:
     import AppKit
     from Foundation import NSObject, NSTimer, NSRunLoop, NSRunLoopCommonModes
@@ -139,7 +169,7 @@ def run_menubar(service, url: str) -> None:
                     cloud_label = f"{provider} : {phase}"
                 cloud_item.setTitle_(cloud_label)
                 warning = health["state"] in {"error", "stale"} or (cloud and sync.get("status") == "error")
-                symbol = "exclamationmark.triangle" if warning else "square.stack.3d.up.fill" if health["state"] == "running" else "square.stack.3d.up"
+                symbol = "exclamationmark.triangle" if warning else "running" if health["state"] == "running" else "idle"
                 button = status_item.button()
                 button.setImage_(images[symbol])
                 button.setToolTip_(f"AI Memory - {health['label']}\nDernier scan : {last}\n{cloud_label}")
@@ -153,12 +183,11 @@ def run_menubar(service, url: str) -> None:
     app.setDelegate_(delegate)
     status_item = AppKit.NSStatusBar.systemStatusBar().statusItemWithLength_(AppKit.NSVariableStatusItemLength)
     menu = AppKit.NSMenu.alloc().init()
-    images = {}
-    for symbol in ["square.stack.3d.up.fill", "square.stack.3d.up", "exclamationmark.triangle"]:
-        icon = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, "AI Memory")
-        icon.setSize_((18, 18))
-        icon.setTemplate_(True)
-        images[symbol] = icon
+    warning_icon = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_("exclamationmark.triangle", "AI Memory")
+    warning_icon.setSize_((18, 18))
+    warning_icon.setTemplate_(True)
+    images = {"running": layers_template(AppKit), "idle": layers_template(AppKit, alpha=0.5),
+              "exclamationmark.triangle": warning_icon}
 
     def item(title, selector=None):
         value = AppKit.NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, selector, "")

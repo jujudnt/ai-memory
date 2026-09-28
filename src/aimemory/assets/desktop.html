@@ -1,136 +1,219 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-platform="__PLATFORM__">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Memory</title>
+    <script>
+      try {
+        const saved = localStorage.getItem("aimemory-theme");
+        if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
+      } catch (error) {}
+    </script>
     <link rel="stylesheet" href="/assets/desktop.css" />
     <script src="/assets/lucide.min.js" defer></script>
     <script src="/assets/desktop.js" defer></script>
   </head>
   <body data-token="__API_TOKEN__">
-    <header class="app-header">
-      <a class="brand" href="/" aria-label="AI Memory, accueil"
-        ><span class="brand-mark"><i data-lucide="layers-2"></i></span
-        ><span>AI Memory</span></a
-      >
-      <div class="header-end">
-        <span class="local-label"
-          ><i data-lucide="lock-keyhole"></i> Sur votre Mac</span
-        ><button
-          class="icon-button"
-          id="settings-open"
-          title="R&eacute;glages"
-          aria-label="R&eacute;glages"
+    <svg width="0" height="0" class="sprite" aria-hidden="true">
+      <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2.6 20.6 7.3 12 12 3.4 7.3Z"/><path d="M3.4 11.9 12 16.6 20.6 11.9"/><path d="M3.4 16.1 12 20.8 20.6 16.1"/></symbol>
+      <symbol id="i-bubble" viewBox="0 0 24 24"><path d="M5 6h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H10l-4 3v-3H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1z"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 7a1 1 0 0 1 1-1h3.5l1.8 2H19a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/></symbol>
+      <symbol id="i-disk" viewBox="0 0 24 24"><ellipse cx="12" cy="6.2" rx="7" ry="3"/><path d="M5 6.2v11.6c0 1.66 3.13 3 7 3s7-1.34 7-3V6.2"/><path d="M5 12c0 1.66 3.13 3 7 3s7-1.34 7-3"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.2"/><path d="M20 20l-4.3-4.3"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 8h2"/><path d="M10 8h10"/><circle cx="8" cy="8" r="2"/><path d="M4 16h9.6"/><path d="M17.6 16H20"/><circle cx="15.6" cy="16" r="2"/></symbol>
+      <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7.4 18h9.4a3.6 3.6 0 0 0 .3-7.18 5.1 5.1 0 0 0-9.83-1.35A3.65 3.65 0 0 0 7.4 18z"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.6l4.4 4.4L19 7.4"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    </svg>
+    <div class="app">
+      <aside class="side">
+        <a class="side-brand" href="/" aria-label="AI Memory, accueil"
+          ><span class="logo"><svg><use href="#i-layers"></use></svg></span
+          ><span class="brandname">AI Memory</span></a
         >
-          <i data-lucide="settings-2"></i>
-        </button>
-      </div>
-    </header>
-    <main>
-      <section class="overview" aria-labelledby="overview-title">
-        <div class="eyebrow">VOTRE M&Eacute;MOIRE IA</div>
-        <div class="overview-heading">
+        <nav class="nav" id="nav" aria-label="Sections">
+          <button class="navi" data-view="conv" aria-current="page">
+            <svg><use href="#i-bubble"></use></svg
+            ><span class="n-label">Conversations</span
+            ><span class="n-count" id="conversation-count"></span>
+          </button>
+          <button class="navi" data-view="proj">
+            <svg><use href="#i-folder"></use></svg
+            ><span class="n-label">Projets</span
+            ><span class="n-count" id="project-count"></span>
+          </button>
+          <button class="navi" data-view="store">
+            <svg><use href="#i-disk"></use></svg
+            ><span class="n-label">Stockage</span
+            ><span class="n-count" id="nav-storage"></span>
+          </button>
+        </nav>
+        <div class="side-spacer"></div>
+        <div class="side-foot" aria-label="Collecte et sauvegarde">
+          <div class="mini" id="health-badge">
+            <span class="mdot"></span>
+            <div class="mini-copy">
+              <div class="mini-t" id="health-label">Connexion&hellip;</div>
+              <div class="mini-s" id="watcher-detail">Lecture de l'activit&eacute;&hellip;</div>
+              <button class="linkbtn" data-action="install-watcher" id="watcher-enable" hidden>
+                Activer
+              </button>
+            </div>
+          </div>
+          <div class="mini" id="cloud-status">
+            <span class="mic"><svg><use href="#i-cloud"></use></svg></span>
+            <div class="mini-copy">
+              <div class="mini-t" id="cloud-title">Sauvegarde cloud</div>
+              <div class="mini-s" id="cloud-detail">Lecture de la connexion&hellip;</div>
+              <progress
+                id="cloud-progress"
+                max="100"
+                value="0"
+                hidden
+                aria-label="Progression de la sauvegarde"
+              ></progress>
+              <button class="linkbtn" id="cloud-setup" hidden>Connecter</button>
+            </div>
+            <div class="mini-actions">
+              <button
+                class="icon-button small"
+                data-action="sync"
+                title="Synchroniser maintenant"
+                aria-label="Synchroniser maintenant"
+                hidden
+              >
+                <i data-lucide="refresh-cw"></i></button
+              ><button
+                class="icon-button small"
+                data-action="pause-sync"
+                id="sync-pause"
+                title="Suspendre les transferts"
+                aria-label="Suspendre les transferts"
+                hidden
+              >
+                <i data-lucide="pause"></i>
+              </button>
+            </div>
+          </div>
+          <div class="side-bottom">
+            <span class="local-label"
+              ><svg><use href="#i-lock"></use></svg
+              ><span id="on-computer">Sur votre Mac</span></span
+            ><button
+              class="icon-button"
+              id="settings-open"
+              title="R&eacute;glages"
+              aria-label="R&eacute;glages"
+            >
+              <svg><use href="#i-sliders"></use></svg>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="main-head">
           <div>
-            <h1 id="overview-title">Vos conversations.</h1>
-            <p class="muted" id="overview-subtitle">
+            <h1 id="view-title">Conversations</h1>
+            <p class="msub" id="overview-subtitle">
               Lecture de votre biblioth&egrave;que&hellip;
             </p>
           </div>
-          <span class="status-badge" id="health-badge"
-            ><span class="dot"></span
-            ><span id="health-label">Connexion&hellip;</span></span
-          >
+          <label class="search" id="search-box"
+            ><svg><use href="#i-search"></use></svg
+            ><input
+              type="search"
+              id="search"
+              placeholder="Rechercher"
+              aria-label="Rechercher dans les conversations"
+              autocomplete="off"
+              spellcheck="false"
+          /></label>
+        </header>
+        <div id="message" role="status" hidden></div>
+        <div class="main-scroll">
+          <section class="view" id="view-conv" aria-labelledby="view-title">
+            <div class="library-filters">
+              <select id="device-filter" aria-label="Ordinateur">
+                <option value="">Tous les appareils</option>
+                <option value="other">Autres appareils</option>
+                <option value="current">Cet ordinateur</option>
+              </select>
+              <select id="source-filter" aria-label="Environnement">
+                <option value="">Tous les environnements</option>
+                <option value="codex">Codex</option>
+                <option value="claude">Claude</option>
+                <option value="vscode">VS Code</option>
+              </select>
+              <span id="library-sync" class="list-foot"></span>
+            </div>
+            <div class="filter" id="project-filter" hidden>
+              <svg><use href="#i-folder"></use></svg
+              ><span id="project-filter-name"></span
+              ><button class="linkbtn" id="project-filter-clear">
+                Toutes les conversations
+              </button>
+            </div>
+            <div id="conversations" class="conversation-list">
+              <p class="empty">Chargement&hellip;</p>
+            </div>
+            <p id="history-count" class="list-foot"></p>
+            <button class="compact" id="conversations-more" hidden>Afficher la suite</button>
+          </section>
+          <section class="view" id="view-proj" aria-labelledby="view-title" hidden>
+            <div id="projects" class="project-list">
+              <p class="empty">Chargement&hellip;</p>
+            </div>
+          </section>
+          <section class="view" id="view-store" aria-labelledby="view-title" hidden>
+            <div class="store-top">
+              <div class="store-total">
+                <span id="total-size"></span
+                ><span class="store-total-label">sur cet ordinateur</span>
+              </div>
+              <div class="store-bar" id="store-bar"></div>
+            </div>
+            <div class="store-list" id="store-list"></div>
+            <div class="grouplabel">Dossier des conversations</div>
+            <div class="store-list">
+              <div class="store-row">
+                <code id="archive-path"></code>
+                <span class="s-end"
+                  ><span class="s-val" id="archive-size"></span
+                  ><button
+                    class="icon-button"
+                    data-action="open-folder"
+                    title="Ouvrir le dossier des conversations"
+                    aria-label="Ouvrir le dossier des conversations"
+                  >
+                    <i data-lucide="folder-open"></i></button
+                ></span>
+              </div>
+              <div class="store-row">
+                <span class="s-left">Archives retir&eacute;es apr&egrave;s sauvegarde</span>
+                <span class="s-val" id="cleanup-size"></span>
+              </div>
+            </div>
+          </section>
         </div>
-        <div class="metrics">
-          <div>
-            <span class="metric-label">Conversations</span
-            ><strong id="conversation-count">&mdash;</strong>
-          </div>
-          <div>
-            <span class="metric-label">Projets</span
-            ><strong id="project-count">&mdash;</strong>
-          </div>
-          <div>
-            <span class="metric-label">Dossier des conversations</span
-            ><strong id="archive-size">&mdash;</strong>
-          </div>
-          <button
-            class="icon-button"
-            data-action="open-folder"
-            title="Ouvrir le dossier des conversations"
-            aria-label="Ouvrir le dossier des conversations"
-          >
-            <i data-lucide="folder-open"></i>
-          </button>
-        </div>
-      </section>
-      <section class="connections" aria-label="Collecte et sauvegarde">
-        <div class="connection">
-          <span class="connection-icon mint"
-            ><i data-lucide="activity"></i
-          ></span>
-          <div class="connection-copy">
-            <h2 id="watcher-title">Collecte automatique</h2>
-            <p id="watcher-detail">Lecture de l'activit&eacute;&hellip;</p>
-          </div>
-          <button
-            class="compact"
-            data-action="install-watcher"
-            id="watcher-enable"
-            hidden
-          >
-            Activer</button
-          ><span id="watcher-check" class="state-symbol" hidden
-            ><i data-lucide="check"></i
-          ></span>
-        </div>
-        <div class="connection">
-          <span class="connection-icon sky"><i data-lucide="cloud"></i></span>
-          <div class="connection-copy">
-            <h2 id="cloud-title">Sauvegarde cloud</h2>
-            <p id="cloud-detail">Lecture de la connexion&hellip;</p>
-            <progress
-              id="cloud-progress"
-              max="100"
-              value="0"
-              hidden
-              aria-label="Progression de la sauvegarde"
-            ></progress>
-          </div>
-          <button class="compact" id="cloud-setup" hidden>Connecter</button
-          ><button
-            class="icon-button"
-            data-action="sync"
-            title="Synchroniser maintenant"
-            aria-label="Synchroniser maintenant"
-            hidden
-          >
-            <i data-lucide="refresh-cw"></i>
-          </button>
-          <button class="icon-button" data-action="pause-sync" id="sync-pause"
-            title="Suspendre les transferts" aria-label="Suspendre les transferts" hidden>
-            <i data-lucide="pause"></i>
-          </button>
-        </div>
-      </section>
-      <div id="message" role="status" hidden></div>
-      <section class="history" aria-labelledby="recent-title">
-        <div class="section-heading">
-          <h2 id="recent-title">Conversations r&eacute;centes</h2>
-          <span id="history-count" class="muted"></span>
-        </div>
-        <div id="conversations" class="conversation-list">
-          <p class="empty">Chargement&hellip;</p>
-        </div>
-      </section>
-      <footer>
-        <span><span class="tiny-dot"></span> Stockage local</span
-        ><span id="footer-size"></span><span id="app-version"></span>
-      </footer>
-    </main>
+      </main>
+    </div>
+
+    <dialog id="conversation-detail" aria-labelledby="conversation-detail-title">
+      <div class="modal-head">
+        <h2 id="conversation-detail-title">Conversation</h2>
+        <button class="icon-button" id="conversation-detail-close" aria-label="Fermer" title="Fermer"><i data-lucide="x"></i></button>
+      </div>
+      <div class="set-sec">
+        <p id="conversation-detail-meta" class="set-desc"></p>
+        <div id="conversation-messages"></div>
+        <button class="compact" id="conversation-messages-more" hidden>Messages suivants</button>
+      </div>
+    </dialog>
     <dialog id="settings" aria-labelledby="settings-title">
-      <div class="dialog-header">
+      <div class="modal-head">
         <h2 id="settings-title">R&eacute;glages</h2>
         <button
           class="icon-button"
@@ -138,223 +221,221 @@
           title="Fermer"
           aria-label="Fermer"
         >
-          <i data-lucide="x"></i>
+          <svg><use href="#i-close"></use></svg>
         </button>
       </div>
-      <div class="dialog-body">
-        <section class="setting-section">
-          <h3>Connexions</h3>
-          <div class="setting-row">
-            <div>
-              <b>MCP pour Codex et Claude</b>
-              <p id="mcp-status">Lecture&hellip;</p>
-            </div>
-            <button class="compact" data-action="install-mcp" id="mcp-enable">
-              Activer
-            </button>
+      <section class="set-sec">
+        <h3 class="set-sectitle">Connexions</h3>
+        <div class="set-row">
+          <div>
+            <div class="set-label">MCP pour Codex et Claude</div>
+            <p class="set-desc" id="mcp-status">Lecture&hellip;</p>
           </div>
-          <div class="setting-row">
-            <div>
-              <b>Collecte au d&eacute;marrage</b>
-              <p id="autostart-status"></p>
-            </div>
+          <button class="compact" data-action="install-mcp" id="mcp-enable">
+            Activer
+          </button>
+        </div>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Collecte au d&eacute;marrage</div>
+            <p class="set-desc" id="autostart-status"></p>
+          </div>
+          <div class="set-end">
             <button
               class="compact"
               data-action="install-watcher"
               id="autostart-enable"
             >
-              Activer
-            </button>
+              Activer</button
+            ><span class="check" id="autostart-check" hidden
+              ><svg><use href="#i-check"></use></svg
+            ></span>
           </div>
-          <div class="setting-row" id="menubar-setting" hidden>
-            <div>
-              <b id="status-icon-label">Ic&ocirc;ne dans la barre de menus</b>
-              <p id="status-icon-help">Lancement &agrave; l'ouverture de session</p>
-            </div>
-            <input
-              type="checkbox"
-              role="switch"
-              id="menubar-login"
-              aria-label="Lancer l'ic&ocirc;ne &agrave; l'ouverture de session"
-            />
+        </div>
+        <div class="set-row" id="menubar-setting" hidden>
+          <div>
+            <div class="set-label" id="status-icon-label">Ic&ocirc;ne dans la barre de menus</div>
+            <p class="set-desc" id="status-icon-help">Lancement &agrave; l'ouverture de session</p>
           </div>
-        </section>
-        <section class="setting-section">
-          <h3>Sauvegarde cloud</h3>
-          <p id="cloud-summary" class="muted"></p>
-          <div id="cloud-folder-settings" hidden>
-            <label for="cloud-folder">Dossier de sauvegarde</label>
-            <input id="cloud-folder" placeholder="Sauvegardes/AI-Memory" />
-            <button class="compact" data-action="cloud-folder">Utiliser ce dossier</button>
-            <p id="cloud-folder-help" class="muted small"></p>
+          <input
+            type="checkbox"
+            role="switch"
+            class="toggle"
+            id="menubar-login"
+            aria-label="Lancer l'ic&ocirc;ne &agrave; l'ouverture de session"
+          />
+        </div>
+      </section>
+      <section class="set-sec">
+        <h3 class="set-sectitle">Apparence</h3>
+        <div class="set-row">
+          <div>
+            <div class="set-label">Th&egrave;me</div>
+            <p class="set-desc">Clair, sombre, ou celui du syst&egrave;me</p>
           </div>
-          <div id="cloud-connect-form">
-            <label for="provider">Destination</label
-            ><select id="provider">
-              <option value="google-drive">Google Drive</option>
-              <option value="dropbox-online">Dropbox</option>
-              <option value="onedrive-online">OneDrive</option>
-              <option value="icloud-online">iCloud Drive</option>
-              <option value="icloud-drive">iCloud Drive du Mac</option>
-              <option value="onedrive">OneDrive du Mac</option>
-              <option value="dropbox">Dropbox du Mac</option>
-              <option value="local-folder">
-                Autre dossier synchronis&eacute;
-              </option>
+          <div class="seg" id="theme" role="radiogroup" aria-label="Th&egrave;me">
+            <button role="radio" data-theme-choice="system" aria-checked="true">Syst&egrave;me</button
+            ><button role="radio" data-theme-choice="light" aria-checked="false">Clair</button
+            ><button role="radio" data-theme-choice="dark" aria-checked="false">Sombre</button>
+          </div>
+        </div>
+      </section>
+      <section class="set-sec">
+        <h3 class="set-sectitle">Sauvegarde cloud</h3>
+        <p id="cloud-summary" class="cloud-sub"></p>
+        <div id="cloud-folder-settings" hidden>
+          <label class="field-label" for="cloud-folder">Dossier de sauvegarde</label>
+          <div class="fieldline">
+            <input id="cloud-folder" placeholder="Sauvegardes/AI-Memory" spellcheck="false" />
+            <button class="compact" id="cloud-folder-pick" hidden>Choisir&hellip;</button
+            ><button class="primary" data-action="cloud-folder">Enregistrer</button>
+          </div>
+          <p id="cloud-folder-help" class="helptext"></p>
+        </div>
+        <div id="cloud-connect-form" class="form">
+          <label for="provider">Destination</label
+          ><select id="provider">
+            <option value="google-drive">Google Drive</option>
+            <option value="dropbox-online">Dropbox</option>
+            <option value="onedrive-online">OneDrive</option>
+            <option value="icloud-online">iCloud Drive</option>
+            <option value="icloud-drive">iCloud Drive du Mac</option>
+            <option value="onedrive">OneDrive du Mac</option>
+            <option value="dropbox">Dropbox du Mac</option>
+            <option value="local-folder">
+              Autre dossier synchronis&eacute;
+            </option>
+          </select>
+          <div id="onedrive-fields" hidden>
+            <label for="onedrive-type">Type OneDrive</label
+            ><select id="onedrive-type">
+              <option value="personal">Personnel</option>
+              <option value="business">Professionnel ou scolaire</option>
             </select>
-            <div id="onedrive-fields" hidden>
-              <label for="onedrive-type">Type OneDrive</label
-              ><select id="onedrive-type">
-                <option value="personal">Personnel</option>
-                <option value="business">Professionnel ou scolaire</option>
-              </select>
-              <label id="cloud-selection-label" hidden>Drive de sauvegarde
-                <select id="cloud-selection"></select>
-              </label>
-            </div>
-            <div id="icloud-fields" hidden>
-              <div id="icloud-credentials">
-                <label
-                  >Apple ID<input
-                    id="icloud-apple-id"
-                    autocomplete="username"
-                    placeholder="nom@icloud.com"
-                /></label>
-                <label
-                  >Mot de passe Apple ID<input
-                    id="icloud-password"
-                    type="password"
-                    autocomplete="current-password"
-                /></label>
-              </div>
+            <label id="cloud-selection-label" hidden>Drive de sauvegarde
+              <select id="cloud-selection"></select>
+            </label>
+          </div>
+          <div id="icloud-fields" hidden>
+            <div id="icloud-credentials">
               <label
-                id="icloud-2fa-label"
-                hidden
-                >Code 2FA Apple<input
-                  id="icloud-2fa"
-                  inputmode="numeric"
-                  autocomplete="one-time-code"
-                  placeholder="123456"
+                >Apple ID<input
+                  id="icloud-apple-id"
+                  autocomplete="username"
+                  placeholder="nom@icloud.com"
               /></label>
-              <div id="icloud-web-approval" class="icloud-approval" hidden>
-                <strong>Code accept&eacute;</strong>
-                <p>
-                  La Protection avanc&eacute;e des donn&eacute;es exige l'acc&egrave;s
-                  Web. Sur l'iPhone, ouvrez R&eacute;glages &gt; compte Apple &gt;
-                  iCloud, activez Acc&egrave;s aux donn&eacute;es iCloud sur le Web,
-                  puis approuvez la demande Apple &eacute;ventuelle.
-                </p>
-              </div>
-              <div id="icloud-terms" class="icloud-approval" hidden>
-                <strong>Session Apple incompl&egrave;te</strong>
-                <p>
-                  Apple a accept&eacute; le code mais n'a ouvert qu'une session
-                  partielle. Connectez-vous &agrave; iCloud.com et acceptez les
-                  nouvelles conditions &eacute;ventuelles avant de relancer.
-                </p>
-                <a
-                  class="icloud-link"
-                  href="https://www.icloud.com/"
-                  target="_blank"
-                  rel="noreferrer"
-                  >Ouvrir iCloud.com</a
-                >
-              </div>
-              <p id="icloud-access-retry" class="muted small" hidden></p>
-              <p class="muted small" id="icloud-flow-help">
-                &Eacute;tape 1 : saisissez Apple ID et mot de passe, puis
-                connectez. &Eacute;tape 2 : quand Apple affiche le code sur
-                votre appareil, AI Memory montre le champ de confirmation. Les
-                mots de passe sp&eacute;cifiques d'app ne sont pas accept&eacute;s
-                par iCloud Drive. Pour utiliser le compte iCloud d&eacute;j&agrave;
-                connect&eacute; &agrave; macOS, choisissez iCloud Drive du Mac.
+              <label
+                >Mot de passe Apple ID<input
+                  id="icloud-password"
+                  type="password"
+                  autocomplete="current-password"
+              /></label>
+            </div>
+            <label
+              id="icloud-2fa-label"
+              hidden
+              >Code 2FA Apple<input
+                id="icloud-2fa"
+                inputmode="numeric"
+                autocomplete="one-time-code"
+                placeholder="123456"
+            /></label>
+            <div id="icloud-web-approval" class="icloud-approval" hidden>
+              <strong>Code accept&eacute;</strong>
+              <p>
+                La Protection avanc&eacute;e des donn&eacute;es exige l'acc&egrave;s
+                Web. Sur l'iPhone, ouvrez R&eacute;glages &gt; compte Apple &gt;
+                iCloud, activez Acc&egrave;s aux donn&eacute;es iCloud sur le Web,
+                puis approuvez la demande Apple &eacute;ventuelle.
               </p>
             </div>
-            <button class="compact" data-action="reset-icloud" id="icloud-reset" hidden>Effacer la connexion iCloud et recommencer</button>
-            <label id="folder-label" hidden
-              >Chemin du dossier<input
-                id="folder"
-                placeholder="/Users/nom/Cloud/AI-Memory"
-            /></label>
-            <p class="muted small" id="provider-note">
-              Autorisation Google via rclone. Les sauvegardes ne sont pas
-              chiffr&eacute;es de bout en bout.
-            </p>
-            <details id="oauth-settings">
-              <summary>Client OAuth personnel</summary>
-              <p class="muted small">
-                Pour une connexion durable, utilisez votre propre client OAuth
-                Google de type Desktop. Changer de client peut n&eacute;cessiter
-                de renvoyer les archives.
+            <div id="icloud-terms" class="icloud-approval" hidden>
+              <strong>Session Apple incompl&egrave;te</strong>
+              <p>
+                Apple a accept&eacute; le code mais n'a ouvert qu'une session
+                partielle. Connectez-vous &agrave; iCloud.com et acceptez les
+                nouvelles conditions &eacute;ventuelles avant de relancer.
               </p>
-              <label
-                >Fichier JSON<input
-                  id="oauth-client"
-                  type="file"
-                  accept="application/json,.json" /></label
-              ><a
-                href="https://rclone.org/drive/#making-your-own-client-id"
+              <a
+                class="icloud-link"
+                href="https://www.icloud.com/"
                 target="_blank"
                 rel="noreferrer"
-                >Configurer un client Google</a
+                >Ouvrir iCloud.com</a
               >
-            </details>
-            <button class="primary" data-action="connect-cloud">
-              Connecter Google Drive
-            </button>
+            </div>
+            <p id="icloud-access-retry" class="helptext" hidden></p>
+            <p class="helptext" id="icloud-flow-help">
+              &Eacute;tape 1 : saisissez Apple ID et mot de passe, puis
+              connectez. &Eacute;tape 2 : quand Apple affiche le code sur
+              votre appareil, AI Memory montre le champ de confirmation. Les
+              mots de passe sp&eacute;cifiques d'app ne sont pas accept&eacute;s
+              par iCloud Drive. Pour utiliser le compte iCloud d&eacute;j&agrave;
+              connect&eacute; &agrave; macOS, choisissez iCloud Drive du Mac.
+            </p>
           </div>
-          <details id="cloud-manage" hidden>
-            <summary>G&eacute;rer la connexion</summary>
-            <p id="cloud-last" class="muted small"></p>
-            <button class="compact" id="cloud-switch">
-              Changer de destination
-            </button>
-            <button class="compact" id="cloud-reconnect">Reconnecter ce compte</button>
-            <button class="compact danger" data-action="disconnect-cloud">
-              D&eacute;connecter
-            </button>
+          <button class="compact" data-action="reset-icloud" id="icloud-reset" hidden>Effacer la connexion iCloud et recommencer</button>
+          <div id="folder-label" class="field" hidden>
+            <label for="folder">Chemin du dossier</label>
+            <div class="fieldline">
+              <input id="folder" placeholder="/Users/nom/Cloud/AI-Memory" spellcheck="false" />
+              <button class="compact" id="folder-pick" hidden>Choisir&hellip;</button>
+            </div>
+          </div>
+          <p class="helptext" id="provider-note">
+            Autorisation Google via rclone. Les sauvegardes ne sont pas
+            chiffr&eacute;es de bout en bout.
+          </p>
+          <details id="oauth-settings">
+            <summary>Client OAuth personnel</summary>
+            <p class="helptext">
+              Pour une connexion durable, utilisez votre propre client OAuth
+              Google de type Desktop. Changer de client peut n&eacute;cessiter
+              de renvoyer les archives.
+            </p>
+            <label
+              >Fichier JSON<input
+                id="oauth-client"
+                type="file"
+                accept="application/json,.json" /></label
+            ><a
+              href="https://rclone.org/drive/#making-your-own-client-id"
+              target="_blank"
+              rel="noreferrer"
+              >Configurer un client Google</a
+            >
           </details>
-        </section>
-        <section class="setting-section">
-          <h3>Stockage local</h3>
-          <dl class="storage-details">
-            <div>
-              <dt>Conversations et archives</dt>
-              <dd id="settings-archive-size"></dd>
-            </div>
-            <div><dt>Conversations consultables</dt><dd id="normalized-size"></dd></div>
-            <div><dt>Sources originales</dt><dd id="raw-size"></dd></div>
-            <div><dt>Versions archiv&eacute;es</dt><dd id="revisions-size"></dd></div>
-            <div><dt>Cache et transferts en attente</dt><dd id="cache-size"></dd></div>
-            <div>
-              <dt>Index de recherche</dt>
-              <dd id="db-size"></dd>
-            </div>
-            <div>
-              <dt>Total sur cet ordinateur</dt>
-              <dd id="total-size"></dd>
-            </div>
-            <div>
-              <dt>Archives retir&eacute;es apr&egrave;s sauvegarde</dt>
-              <dd id="cleanup-size"></dd>
-            </div>
-          </dl>
-          <code id="archive-path"></code>
-        </section>
-        <details class="setting-section diagnostics">
-          <summary>V&eacute;rification et diagnostics</summary>
-          <p id="audit-detail" class="muted small"></p>
-          <p id="watcher-diagnostic" class="muted small"></p>
+          <button class="primary" data-action="connect-cloud">
+            Connecter Google Drive
+          </button>
+        </div>
+        <details id="cloud-manage" hidden>
+          <summary>G&eacute;rer la connexion</summary>
+          <p id="cloud-last" class="helptext"></p>
           <div class="actions">
-            <button class="compact" data-action="audit">
-              <i data-lucide="shield-check"></i> V&eacute;rifier les copies</button
-            ><button class="compact" data-action="import">
-              <i data-lucide="download"></i> Importer maintenant
+            <button class="compact" id="cloud-switch">
+              Changer de destination</button
+            ><button class="compact" id="cloud-reconnect">Reconnecter ce compte</button
+            ><button class="compact danger" data-action="disconnect-cloud">
+              D&eacute;connecter
             </button>
           </div>
         </details>
-        <p id="settings-message" class="small" role="status" hidden></p>
-      </div>
+      </section>
+      <details class="set-sec diagnostics">
+        <summary>V&eacute;rification et diagnostics</summary>
+        <p id="audit-detail" class="helptext"></p>
+        <p id="watcher-diagnostic" class="helptext"></p>
+        <div class="actions">
+          <button class="compact" data-action="audit">
+            <i data-lucide="shield-check"></i> V&eacute;rifier les copies</button
+          ><button class="compact" data-action="import">
+            <i data-lucide="download"></i> Importer maintenant
+          </button>
+        </div>
+      </details>
+      <p id="settings-message" role="status" hidden></p>
+      <p class="modal-foot" id="app-version"></p>
     </dialog>
   </body>
 </html>

@@ -42,9 +42,11 @@ def run_windows_tray(service, url: str) -> None:
             pystray.MenuItem("Quitter l'interface", quit_interface),
         )
 
-    images = {name: _tray_image(Image, ImageDraw, color) for name, color in {
-        "running": "#16835b", "idle": "#59636e", "warning": "#d84a3a",
-    }.items()}
+    images = {
+        "running": _tray_image(Image, ImageDraw, "#ffffff"),
+        "idle": _tray_image(Image, ImageDraw, "#9a9e93"),
+        "warning": _tray_image(Image, ImageDraw, "#ffffff", alert=True),
+    }
     icon = pystray.Icon("ai-memory", images["idle"], "AI Memory", status_menu())
 
     def update() -> None:
@@ -82,15 +84,24 @@ def run_windows_tray(service, url: str) -> None:
     icon.run(setup=setup)
 
 
-def _tray_image(Image, ImageDraw, color: str):
-    """Small high-contrast stacked-memory mark that remains legible at 16 px."""
+LAYERS = (  # The app glyph, in its 24-unit design grid.
+    ((12, 2.6), (20.6, 7.3), (12, 12), (3.4, 7.3), (12, 2.6)),
+    ((3.4, 11.9), (12, 16.6), (20.6, 11.9)),
+    ((3.4, 16.1), (12, 20.8), (20.6, 16.1)),
+)
+
+
+def _tray_image(Image, ImageDraw, color: str, alert: bool = False):
+    """App badge (dark rounded square, light layers) that remains legible at 16 px."""
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((5, 5, 59, 59), radius=13, fill="#171a1c")
-    for points in (
-        ((17, 25), (32, 16), (47, 25), (32, 34)),
-        ((17, 34), (32, 43), (47, 34)),
-        ((17, 43), (32, 52), (47, 43)),
-    ):
-        draw.line(points, fill=color, width=5, joint="curve")
+    draw.rounded_rectangle((5, 5, 59, 59), radius=13, fill="#1a1c1a")
+    scale, offset, width = 1.5, 14, 4
+    for path in LAYERS:
+        points = [(offset + x * scale, offset + y * scale) for x, y in path]
+        draw.line(points, fill=color, width=width, joint="curve")
+        for x, y in (points[0], points[-1]):
+            draw.ellipse((x - width / 2, y - width / 2, x + width / 2, y + width / 2), fill=color)
+    if alert:
+        draw.ellipse((40, 40, 58, 58), fill="#d84a3a", outline="#1a1c1a", width=3)
     return image

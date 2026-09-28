@@ -16,6 +16,7 @@ from pathlib import Path
 from filelock import FileLock, Timeout
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs
 
 from aimemory.installer import (
     claude_desktop_available,
@@ -32,7 +33,7 @@ from aimemory.installer import (
 )
 from aimemory.service import MemoryService
 from aimemory.cloud.google_drive import GoogleDriveProvider
-from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, resolve_folder_root, validate_sync_root
+from aimemory.cloud.providers import LOCAL_FOLDER_PROVIDERS, RCLONE_DIRECT_PROVIDERS, provider_label, resolve_folder_root, validate_sync_root
 from aimemory.cloud.rclone_provider import RcloneCloudProvider
 from aimemory.cloud.destination import cloud_folder, remote_path
 from aimemory.sync.cloud_sync import cancel_active_sync, clear_cancel
@@ -82,7 +83,41 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.FORBIDDEN)
             return
         if self.path == "/" or self.path.startswith("/?"):
-            self._send_html(HTML.replace("__API_TOKEN__", self.state.token))
+            platform = "windows" if sys.platform == "win32" else "mac"
+            self._send_html(HTML.replace("__API_TOKEN__", self.state.token).replace("__PLATFORM__", platform))
+            return
+        route, _, query = self.path.partition("?")
+        if route == "/api/projects":
+            self._send_json({"projects": self.state.service.db.list_projects()})
+            return
+        if route == "/api/devices":
+            from aimemory.adapters.common import stable_device_id
+            self._send_json({"devices": self.state.service.db.list_devices(stable_device_id())})
+            return
+        if route == "/api/conversation":
+            params = parse_qs(query)
+            offset = params.get("offset", ["0"])[0]
+            page = self.state.service.db.conversation_page(
+                params.get("id", [""])[0], offset=min(int(offset), 1000000) if offset.isdigit() else 0,
+                limit=20, max_chars=4000)
+            self._send_json({"conversation": page})
+            return
+        if route == "/api/conversations":
+            from aimemory.adapters.common import stable_device_id
+            params = parse_qs(query)
+            text = params.get("q", [""])[0].strip()[:200]
+            project = params.get("project", [""])[0] or None
+            limit = params.get("limit", ["50"])[0]
+            limit = min(int(limit), 200) if limit.isdigit() and int(limit) > 0 else 50
+            offset = params.get("offset", ["0"])[0]
+            offset = min(int(offset), 1000000) if offset.isdigit() else 0
+            options = dict(project_id=project, limit=limit + 1, offset=offset,
+                           source=params.get("source", [""])[0] or None,
+                           device=params.get("device", [""])[0] or None, current_device_id=stable_device_id())
+            rows = (self.state.service.db.search(text, **options) if text
+                    else self.state.service.db.list_conversations(**options))
+            self._send_json({"conversations": rows[:limit], "has_more": len(rows) > limit,
+                             "next_offset": offset + min(len(rows), limit)})
             return
         if self.path == "/api/status":
             status = self.state.service.status()
@@ -95,6 +130,12 @@ class Handler(BaseHTTPRequestHandler):
             status["menubar_available"] = status_icon_available()
             status["menubar_login"] = login_enabled()
             status["status_icon_platform"] = "windows" if sys.platform == "win32" else "mac"
+            from aimemory.folder_picker import cloud_sync_roots, picker_supported
+            provider = status["storage"]["provider"]
+            status["folder_picker"] = picker_supported()
+            status["backup_folder_picker"] = picker_supported() and status["storage"]["cloud_sync"] == "configured" and (
+                provider in LOCAL_FOLDER_PROVIDERS or bool(cloud_sync_roots(provider)))
+            status["theme"] = read_json(self.state.service.paths.state / "appearance.json").get("theme", "system")
             try:
                 with FileLock(str(self.state.service.paths.state / "sync.lock"), timeout=0):
                     status["sync_active"] = False
@@ -110,9 +151,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/identity":
             self._send_json({"app": "ai-memory"})
             return
-        assets = {"/assets/desktop.css": "text/css", "/assets/desktop.js": "text/javascript", "/assets/lucide.min.js": "text/javascript"}
+        assets = {"/assets/desktop.css": "text/css", "/assets/desktop.js": "text/javascript", "/assets/lucide.min.js": "text/javascript",
+                  "/assets/fonts/archivo.woff2": "font/woff2", "/assets/fonts/oswald.woff2": "font/woff2"}
         if self.path in assets:
-            payload = (ASSETS / self.path.rsplit("/", 1)[1]).read_bytes()
+            payload = (ASSETS / self.path.removeprefix("/assets/")).read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", assets[self.path])
             self.send_header("Content-Length", str(len(payload)))
@@ -168,6 +210,33 @@ class Handler(BaseHTTPRequestHandler):
                 return self.state.service.sync_now()
             self._send_json(self.state.start_job("Changement de dossier et synchronisation", change_folder))
             return
+        if self.path == "/api/choose-folder":
+            from aimemory.folder_picker import choose_folder, cloud_relative_folder, cloud_sync_roots
+            current = str(self.body.get("current") or "").strip()
+            if self.body.get("purpose") == "connect":
+                chosen = choose_folder("Choisissez le dossier de sauvegarde AI Memory",
+                                       Path(current).expanduser() if current else None)
+                self._send_json({"path": str(chosen) if chosen else None})
+                return
+            config = read_json(self.state.service.paths.state / "cloud.json")
+            if not config:
+                raise ValueError("Connectez d'abord un compte cloud.")
+            provider = config["provider"]
+            if provider in LOCAL_FOLDER_PROVIDERS:
+                start = Path(current or config.get("root") or "").expanduser()
+                chosen = choose_folder("Choisissez le dossier de sauvegarde AI Memory",
+                                       start if start.is_dir() else start.parent)
+                self._send_json({"path": str(chosen) if chosen else None})
+                return
+            roots = cloud_sync_roots(provider)
+            if not roots:
+                raise ValueError("Aucune copie locale de cette destination sur cet ordinateur. Saisissez le chemin du dossier.")
+            start = roots[0] / (current or config.get("root") or "")
+            label = provider_label(provider)
+            chosen = choose_folder(f"Choisissez le dossier de sauvegarde dans {label}",
+                                   start if start.is_dir() else roots[0] if len(roots) == 1 else roots[0].parent)
+            self._send_json({"path": cloud_relative_folder(chosen, roots, provider) if chosen else None})
+            return
         if self.path == "/api/reset-icloud":
             if self.state.job.get("running"):
                 raise ValueError("Attendez la fin de l'opération en cours avant de recommencer.")
@@ -175,6 +244,13 @@ class Handler(BaseHTTPRequestHandler):
                 RcloneCloudProvider.for_provider(self.state.service.paths, "icloud-online").reset_icloud()
             self.state.job = {}
             self._send_json({"message": "Identifiants et session iCloud effacés. Vous pouvez recommencer."})
+            return
+        if self.path == "/api/theme":
+            theme = self.body.get("theme")
+            if theme not in {"system", "light", "dark"}:
+                raise ValueError("Expected system, light or dark")
+            write_json(self.state.service.paths.state / "appearance.json", {"theme": theme})
+            self._send_json({"message": "Apparence mise à jour."})
             return
         if self.path == "/api/menubar-login":
             from aimemory.menubar import set_login_enabled

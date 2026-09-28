@@ -79,6 +79,16 @@ def main() -> None:
         run("sync", environment=other)
         run("sync")
         assert "second-device-sync-marker" in run("search", "second-device-sync-marker")
+        # Renames must reach the other computer without creating message revisions.
+        index = Path(env["CODEX_HOME"]) / "session_index.jsonl"
+        index.write_text(json.dumps({"id": "smoke", "thread_name": "Renamed cloud conversation",
+                                     "updated_at": "2026-09-28T12:00:00Z"}) + "\n", encoding="utf-8")
+        snapshots_before = {str(path) for path in (Path(cloud["root"]) / "snapshots").rglob("*.json.*")}
+        run("import-codex")
+        run("sync")
+        run("sync", environment=other)
+        assert "Renamed cloud conversation" in run("search", "Renamed", environment=other)
+        assert snapshots_before == {str(path) for path in (Path(cloud["root"]) / "snapshots").rglob("*.json.*")}
         def inventory():
             remote = Path(cloud["root"])
             return {str(path.relative_to(remote)): path.stat().st_size for path in remote.rglob("*") if path.is_file()}
