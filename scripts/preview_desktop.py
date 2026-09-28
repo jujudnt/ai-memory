@@ -44,7 +44,7 @@ class PreviewHandler(Handler):
         params = parse_qs(query)
         if self.path == "/api/status":
             self._send_json(STATUS)
-        elif route == "/api/conversations":
+        elif route in {"/api/conversations", "/api/conversation-options"}:
             rows = CONVERSATIONS
             device = params.get("device", [""])[0]
             if device:
@@ -53,7 +53,9 @@ class PreviewHandler(Handler):
             if source:
                 rows = [row for row in rows if source in row["source"]]
             text = params.get("q", [""])[0].lower()
-            rows = [row for row in rows if text in row["name"].lower()]
+            rows = [row for row in rows if text in row["name"].lower() or (route == "/api/conversations" and text in row["latest_user_message"].lower())]
+            if params.get("conversation"):
+                rows = [row for row in rows if row["id"] in params["conversation"]]
             offset, limit = int(params.get("offset", ["0"])[0]), int(params.get("limit", ["50"])[0])
             self._send_json({"conversations": rows[offset:offset+limit], "has_more": len(rows) > offset + limit,
                              "next_offset": offset + min(limit, len(rows[offset:]))})

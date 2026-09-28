@@ -192,38 +192,14 @@ function applyTheme(value) {
       button.setAttribute("aria-checked", String(button.dataset.themeChoice === value)),
     );
 }
-function readableText(value) {
-  return String(value || "")
-    .replace(/^[\s\S]*?##\s*My request(?: for Codex)?:/i, " ")
-    .replace(/#+\s*(?:Files mentioned by the user|Context from my IDE setup)[\s\S]*?(?=\n\s*\n|$)/gi, " ")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/https?:\/\/\S+/g, " ")
-    .replace(/(?:[A-Za-z]:)?(?:\/[\w.@%+-]+){2,}\/?/g, " ")
-    .replace(/&[a-z]+;/gi, " ")
-    .replace(/[`*_>#]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-function looksTechnical(text) {
-  const head = text.slice(0, 90);
-  return (
-    (head.match(/[{};=<>|\\]/g) || []).length > 3 ||
-    /^(?:\d+[:-]|:root|def |class |import |from |const |function |\$\(|SELECT )/.test(
-      text,
-    )
-  );
-}
 function conversationLabel(row) {
-  if (String(row.name || "").trim()) return { text: row.name, untitled: false };
-  for (const candidate of [row.latest_user_message, row.title]) {
-    const text = readableText(candidate);
-    if (!text || looksTechnical(text)) continue;
-    const capped = text.length > 110 ? `${text.slice(0, 110).replace(/\s\S*$/, "")}\u2026` : text;
-    return { text: capped[0].toUpperCase() + capped.slice(1), untitled: false };
-  }
-  return { text: "Conversation sans titre", untitled: true };
+  const text = String(row.latest_user_message || "").trim();
+  return { text: text || "Aucun message disponible", untitled: !text };
 }
+const shortLabel = value => {
+  const chars = Array.from(String(value || ""));
+  return chars.length > 60 ? chars.slice(0, 60).join("") + "..." : chars.join("");
+};
 
 // Views: conversations are the home screen, projects and storage open from the sidebar.
 let view = "conv";
@@ -236,6 +212,8 @@ let nextOffset = 0;
 let hasMore = false;
 let libraryLoading = false;
 let libraryRevision = null;
+const conversationSelection = new Map();
+let optionSeq = 0, optionOffset = 0, optionTimer = null;
 const plural = (count, word) =>
   `${Number(count || 0).toLocaleString("fr-FR")} ${word}${count > 1 ? "s" : ""}`;
 const query = () => $("#search").value.trim();
@@ -268,7 +246,7 @@ function conversationItem(row) {
     '<svg><use href="#i-bubble"></use></svg><div class="conversation-copy"><div class="conversation-title"></div><div class="conversation-source"></div></div><time></time>';
   const label = conversationLabel(row);
   const heading = item.querySelector(".conversation-title");
-  heading.textContent = label.text;
+  heading.textContent = shortLabel(label.text);
   heading.title = label.text;
   heading.classList.toggle("untitled", label.untitled);
   const meta = item.querySelector(".conversation-source");
@@ -287,6 +265,12 @@ function conversationItem(row) {
     device.title = row.device_name;
     meta.append(device);
   }
+  const name = document.createElement("span");
+  name.className = "conversation-name";
+  const fullName = row.name || row.title || "Conversation sans titre";
+  name.textContent = shortLabel(fullName);
+  name.title = fullName;
+  meta.append(name);
   item.addEventListener("click", () => openConversation(row));
   item.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openConversation(row); }
@@ -345,6 +329,7 @@ async function loadConversations(append = false) {
   if (projectFilter) params.set("project", projectFilter.id);
   if ($("#device-filter").value) params.set("device", $("#device-filter").value);
   if ($("#source-filter").value) params.set("source", $("#source-filter").value);
+  for (const id of conversationSelection.keys()) params.append("conversation", id);
   try {
     const res = await fetch(`/api/conversations?${params}`, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) throw new Error("Recherche impossible pour le moment.");
@@ -382,11 +367,103 @@ async function loadDevices() {
     select.value = selected;
   } catch { /* Keep the current device selection on a temporary network failure. */ }
 }
+function updateConversationSelection() {
+  const count = conversationSelection.size;
+  $("#conversation-filter-label").textContent = count ? `${plural(count, "conversation")} sélectionnée${count > 1 ? "s" : ""}` : "Toutes les conversations";
+  $("#conversation-filter-clear").hidden = !count;
+  $("#conversation-filter-options").querySelectorAll("input").forEach(input => {
+    input.checked = conversationSelection.has(input.value);
+    input.disabled = count >= 200 && !input.checked;
+  });
+  if ($("#conversation-filter").open) positionConversationMenu();
+}
+async function loadConversationOptions(append = false) {
+  const seq = ++optionSeq;
+  if (!append) { optionOffset = 0; $("#conversation-filter-options").replaceChildren(); }
+  $("#conversation-filter-more").disabled = true;
+  $("#conversation-filter-status").textContent = "Chargement...";
+  try {
+    const params = new URLSearchParams({q: $("#conversation-filter-search").value.trim(), offset: String(optionOffset)});
+    const response = await fetch(`/api/conversation-options?${params}`, {signal: AbortSignal.timeout(15000)});
+    if (!response.ok) throw new Error("Chargement impossible. Rouvrez le filtre pour réessayer.");
+    const data = await response.json();
+    if (seq !== optionSeq) return;
+    for (const row of data.conversations || []) {
+      const label = document.createElement("label"), input = document.createElement("input"), copy = document.createElement("span");
+      input.type = "checkbox";
+      input.value = row.id;
+      input.checked = conversationSelection.has(row.id);
+      const name = document.createElement("span"), meta = document.createElement("small");
+      name.textContent = shortLabel(row.name);
+      name.title = row.name;
+      meta.textContent = [row.project_name, row.device_name].filter(Boolean).join(" · ");
+      copy.append(name, meta);
+      input.addEventListener("change", () => {
+        if (input.checked) conversationSelection.set(row.id, row.name);
+        else conversationSelection.delete(row.id);
+        updateConversationSelection();
+        loadConversations();
+      });
+      label.append(input, copy);
+      $("#conversation-filter-options").append(label);
+    }
+    optionOffset = data.next_offset;
+    $("#conversation-filter-more").hidden = !data.has_more;
+    $("#conversation-filter-status").textContent = optionOffset ? "" : "Aucune conversation trouvée.";
+    updateConversationSelection();
+  } catch (error) {
+    if (seq === optionSeq) $("#conversation-filter-status").textContent = error.message;
+  } finally { if (seq === optionSeq) $("#conversation-filter-more").disabled = false; }
+}
+$("#conversation-filter").addEventListener("toggle", () => {
+  if ($("#conversation-filter").open) { positionConversationMenu(); loadConversationOptions(); }
+});
+function positionConversationMenu() {
+  const menu = $(".conversation-filter-menu");
+  menu.style.left = "0px";
+  menu.style.top = "calc(100% + 6px)";
+  menu.style.bottom = "auto";
+  menu.style.maxHeight = "";
+  const anchor = $("#conversation-filter summary").getBoundingClientRect();
+  const height = window.visualViewport?.height || window.innerHeight;
+  const below = height - anchor.bottom - 22, above = anchor.top - 22;
+  const flip = menu.scrollHeight > below && above > below;
+  if (flip) { menu.style.top = "auto"; menu.style.bottom = "calc(100% + 6px)"; }
+  menu.style.maxHeight = `${Math.max(100, flip ? above : below)}px`;
+  const bounds = menu.getBoundingClientRect();
+  menu.style.left = `${Math.min(0, window.innerWidth - 16 - bounds.right)}px`;
+}
+window.addEventListener("resize", () => {
+  if ($("#conversation-filter").open) positionConversationMenu();
+});
+window.visualViewport?.addEventListener("resize", () => {
+  if ($("#conversation-filter").open) positionConversationMenu();
+});
+$("#conversation-filter-search").addEventListener("input", () => {
+  clearTimeout(optionTimer);
+  optionSeq += 1;
+  optionTimer = setTimeout(() => loadConversationOptions(), 180);
+});
+$("#conversation-filter-more").addEventListener("click", () => loadConversationOptions(true));
+$("#conversation-filter-clear").addEventListener("click", () => {
+  conversationSelection.clear();
+  updateConversationSelection();
+  loadConversations();
+});
+document.addEventListener("click", event => {
+  if (!$("#conversation-filter").contains(event.target)) $("#conversation-filter").open = false;
+});
+$("#conversation-filter").addEventListener("keydown", event => {
+  if (event.key === "Escape") {
+    $("#conversation-filter").open = false;
+    $("#conversation-filter summary").focus();
+  }
+});
 let detailId = null, detailOffset = 0, detailSeq = 0;
 async function openConversation(row) {
   detailId = row.id;
   detailOffset = 0;
-  $("#conversation-detail-title").textContent = conversationLabel(row).text;
+  $("#conversation-detail-title").textContent = row.name || row.title || "Conversation sans titre";
   $("#conversation-detail-meta").textContent = [row.project_name, sourceName(row.source), row.device_name].filter(Boolean).join(" · ");
   $("#conversation-messages").replaceChildren();
   $("#conversation-detail").showModal();

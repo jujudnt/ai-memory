@@ -245,6 +245,21 @@ def test_projects_search_and_bundled_fonts(desktop_server, tmp_path):
         assert first["has_more"] is True and first["next_offset"] == 2
         assert second["has_more"] is False
         assert len({row["id"] for row in first["conversations"] + second["conversations"]}) == 3
+        ids = [row["id"] for row in first["conversations"]]
+        selected = "&".join(f"conversation={cid}" for cid in ids)
+        assert {r["id"] for r in json.loads(get(f"/api/conversations?{selected}"))["conversations"]} == set(ids)
+        assert len(json.loads(get(f"/api/conversations?{selected}&limit=1&offset=1"))["conversations"]) == 1
+        options = json.loads(get("/api/conversation-options?q=migration"))["conversations"]
+        assert len(options) == 1
+        assert not json.loads(get("/api/conversation-options?q=%25"))["conversations"]
+        from aimemory.catalog import publish
+        from time import time
+        publish(Handler.state.service, options[0]["id"], "name", "Migration personnelle", time())
+        renamed = json.loads(get("/api/conversations?q=personnelle"))["conversations"]
+        assert renamed[0]["name"] == "Migration personnelle"
+        assert renamed[0]["latest_user_message"] == "retrouver la migration iCloud"
+        assert json.loads(get("/api/conversation-options?q=personnelle"))["conversations"][0]["id"] == options[0]["id"]
+        assert not json.loads(get(f"/api/conversations?q=personnelle&conversation={ids[0]}"))["conversations"]
         devices = json.loads(get("/api/devices"))["devices"]
         assert len(devices) == 1 and devices[0]["is_current"]
         assert not json.loads(get("/api/conversations?device=other"))["conversations"]

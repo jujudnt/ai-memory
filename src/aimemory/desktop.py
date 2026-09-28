@@ -87,6 +87,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(HTML.replace("__API_TOKEN__", self.state.token).replace("__PLATFORM__", platform))
             return
         route, _, query = self.path.partition("?")
+        if route == "/api/conversation-options":
+            params = parse_qs(query)
+            offset = params.get("offset", ["0"])[0]
+            offset = min(int(offset), 1000000) if offset.isdigit() else 0
+            rows = self.state.service.db.conversation_options(params.get("q", [""])[0][:200], offset)
+            self._send_json({"conversations": rows[:50], "has_more": len(rows) > 50,
+                             "next_offset": offset + min(len(rows), 50)})
+            return
         if route == "/api/projects":
             self._send_json({"projects": self.state.service.db.list_projects()})
             return
@@ -105,6 +113,10 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/conversations":
             from aimemory.adapters.common import stable_device_id
             params = parse_qs(query)
+            ids = list(dict.fromkeys(params.get("conversation", [])))
+            if len(ids) > 200:
+                self.send_error(HTTPStatus.BAD_REQUEST, "Select at most 200 conversations")
+                return
             text = params.get("q", [""])[0].strip()[:200]
             project = params.get("project", [""])[0] or None
             limit = params.get("limit", ["50"])[0]
@@ -113,7 +125,8 @@ class Handler(BaseHTTPRequestHandler):
             offset = min(int(offset), 1000000) if offset.isdigit() else 0
             options = dict(project_id=project, limit=limit + 1, offset=offset,
                            source=params.get("source", [""])[0] or None,
-                           device=params.get("device", [""])[0] or None, current_device_id=stable_device_id())
+                           device=params.get("device", [""])[0] or None, current_device_id=stable_device_id(),
+                           conversation_ids=ids)
             rows = (self.state.service.db.search(text, **options) if text
                     else self.state.service.db.list_conversations(**options))
             self._send_json({"conversations": rows[:limit], "has_more": len(rows) > limit,

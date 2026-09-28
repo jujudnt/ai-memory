@@ -86,7 +86,7 @@ assert.equal(el('view-proj').hidden, true);
 assert.match(el('overview-subtitle').textContent, /30 conversations.*Tous les appareils.*iCloud Drive/);
 assert.deepEqual([...w.document.querySelectorAll('#conversations .grouplabel')].map(n => n.textContent),
   ["Aujourd'hui", 'Plus tôt']);
-assert.equal(w.document.querySelector('.conversation-title.untitled').textContent, 'Conversation sans titre');
+assert.equal(w.document.querySelector('.conversation-title.untitled').textContent, 'Aucun message disponible');
 assert.match(el('history-count').textContent, /2 plus r.centes sur 30/);
 w.document.querySelector('.navi[data-view="store"]').click();
 assert.equal(el('view-store').hidden, false);
@@ -104,7 +104,14 @@ w.render({...base, recent_conversations: [
   {source: 'codex-desktop', latest_user_message: 'Premier sujet', project_name: 'sabai', name: 'Build AI Memory V1', updated_at: today},
   {source: 'claude-desktop', latest_user_message: 'Même texte', name: 'Même texte', updated_at: today},
 ]});
-assert.deepEqual([...w.document.querySelectorAll('.conversation-title')].map(n => n.textContent), ['Build AI Memory V1', 'Même texte']);
+assert.deepEqual([...w.document.querySelectorAll('.conversation-title')].map(n => n.textContent), ['Premier sujet', 'Même texte']);
+assert.equal(w.document.querySelector('.conversation-name').textContent, 'Build AI Memory V1');
+const exact = 'const x = "Sabai"; https://ex.com/?a=1 & **test**';
+const exactRow = w.conversationItem({latest_user_message:exact, name:'Titre '.repeat(20)});
+assert.equal(exactRow.querySelector('.conversation-title').textContent, exact);
+assert.equal(exactRow.querySelector('.conversation-name').textContent, 'Titre '.repeat(10) + '...');
+assert.equal(exactRow.querySelector('.conversation-name').title, 'Titre '.repeat(20));
+assert.equal(w.conversationItem({latest_user_message:'x'.repeat(61)}).querySelector('.conversation-title').textContent, 'x'.repeat(60)+'...');
 
 // The folder dialog button appears only where a local copy can be browsed.
 w.render({...base, folder_picker: true, backup_folder_picker: false});
@@ -136,7 +143,7 @@ void (async () => {
   await new Promise(resolve => setTimeout(resolve, 0));
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(el('cloud-folder').value, 'Sauvegardes/AI');
-  const cloudRow = {id:'cloud-1', source:'codex-desktop', name:'Sabai renommé', project_name:'Client Sabai', device_name:'MacBook Air', updated_at:today};
+  const cloudRow = {id:'cloud-1', source:'codex-desktop', name:'Sabai renommé', latest_user_message:'voici mon message exact', project_name:'Client Sabai', device_name:'MacBook Air', updated_at:today};
   const requests = [];
   w.fetch = async (url) => {
     requests.push(String(url));
@@ -152,7 +159,7 @@ void (async () => {
   assert.match(requests.at(-1), /device=other/);
   assert.match(requests.at(-1), /source=codex/);
   assert.equal(el('conversations-more').hidden, false);
-  assert.match(el('conversations').textContent, /Sabai renommé.*Client Sabai.*MacBook Air/);
+  assert.match(el('conversations').textContent, /voici mon message exact.*Client Sabai.*MacBook Air.*Sabai renommé/);
   await w.loadConversations(true);
   assert.match(requests.at(-1), /offset=50/);
   assert.equal(w.document.querySelectorAll('#conversations .conversation').length, 2);
@@ -161,6 +168,25 @@ void (async () => {
   assert.equal(el('conversation-detail').open, true);
   assert.match(el('conversation-messages').textContent, /<script>pas du HTML<\/script>/);
   assert.equal(el('conversation-messages').querySelector('script'), null);
+  w.fetch = async (url) => {
+    requests.push(String(url));
+    return {ok:true, json:async () => ({conversations:[cloudRow,{...cloudRow,id:'cloud-2'}], next_offset:2,has_more:false})};
+  };
+  await w.loadConversationOptions();
+  const choices = el('conversation-filter-options').querySelectorAll('input');
+  choices[0].click();
+  choices[1].click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.match(requests.at(-1), /conversation=cloud-1&conversation=cloud-2/);
+  assert.match(el('conversation-filter-label').textContent, /2 conversations/);
+  el('conversation-filter-search').value = 'Sabai';
+  await w.loadConversationOptions();
+  assert.match(requests.at(-1), /conversation-options\?q=Sabai/);
+  assert.equal(el('conversation-filter-options').querySelector('input').checked, true);
+  el('conversation-filter-clear').click();
+  assert.equal(el('conversation-filter-clear').hidden, true);
+  assert.ok(!requests.at(-1).includes('conversation='));
+  await new Promise(resolve => setTimeout(resolve, 0));
   dom.window.close();
   console.log('Desktop auth, folder editing, cloud library pagination, device filters and reading passed');
 })().catch((error) => {

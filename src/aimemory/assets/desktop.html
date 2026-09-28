@@ -126,8 +126,8 @@
             ><input
               type="search"
               id="search"
-              placeholder="Rechercher"
-              aria-label="Rechercher dans les conversations"
+              placeholder="Message ou conversation"
+              aria-label="Rechercher par message ou nom de conversation"
               autocomplete="off"
               spellcheck="false"
           /></label>
@@ -147,6 +147,16 @@
                 <option value="claude">Claude</option>
                 <option value="vscode">VS Code</option>
               </select>
+              <details id="conversation-filter" class="conversation-filter">
+                <summary><span id="conversation-filter-label">Toutes les conversations</span><i data-lucide="chevron-down"></i></summary>
+                <div class="conversation-filter-menu">
+                  <input type="search" id="conversation-filter-search" placeholder="Nom de conversation" aria-label="Rechercher un nom de conversation" autocomplete="off" />
+                  <button type="button" class="linkbtn" id="conversation-filter-clear" hidden>Tout désélectionner</button>
+                  <div id="conversation-filter-options" class="conversation-filter-options"></div>
+                  <p id="conversation-filter-status" role="status"></p>
+                  <button type="button" class="compact" id="conversation-filter-more" hidden>Afficher la suite</button>
+                </div>
+              </details>
               <span id="library-sync" class="list-foot"></span>
             </div>
             <div class="filter" id="project-filter" hidden>

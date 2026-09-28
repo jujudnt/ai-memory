@@ -331,6 +331,7 @@ class MemoryDatabase:
         offset: int = 0,
         device: str | None = None,
         current_device_id: str | None = None,
+        conversation_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         self.initialize()
         sql = f"""
@@ -363,8 +364,9 @@ class MemoryDatabase:
         params: list[Any] = [_fts_query(query)]
         clause, filters = _filters(source, project_id, date_from, date_to, "c.")
         device_clause, device_filters = _device_filter(device, current_device_id, "c.")
-        sql += clause + device_clause + " ORDER BY (p.name = ? COLLATE NOCASE) DESC, score, c.updated_at DESC, c.id LIMIT ? OFFSET ?"
-        filters.extend([*device_filters, query.strip()])
+        id_clause, ids = _conversation_filter(conversation_ids, "c.")
+        sql += clause + device_clause + id_clause + " ORDER BY (c.title = ? COLLATE NOCASE) DESC, (p.name = ? COLLATE NOCASE) DESC, score, c.updated_at DESC, c.id LIMIT ? OFFSET ?"
+        filters.extend([*device_filters, *ids, query.strip(), query.strip()])
         params.extend([*filters, max(1, min(limit, 1000)), max(0, offset)])
         with self.connect() as conn:
             return [dict(row) for row in conn.execute(sql, params).fetchall()]
@@ -379,6 +381,7 @@ class MemoryDatabase:
         offset: int = 0,
         device: str | None = None,
         current_device_id: str | None = None,
+        conversation_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         self.initialize()
         sql = "SELECT * FROM conversations WHERE 1=1"
@@ -388,6 +391,9 @@ class MemoryDatabase:
         device_clause, device_filters = _device_filter(device, current_device_id)
         sql += device_clause
         params.extend(device_filters)
+        id_clause, ids = _conversation_filter(conversation_ids)
+        sql += id_clause
+        params.extend(ids)
         sql = f"""
             SELECT c.*, d.name AS device_name, p.name AS project_name, p.cwd AS project_path, {NAME_SQL},
                 (
@@ -418,6 +424,19 @@ class MemoryDatabase:
                 item["latest_user_message"] = _conversation_preview(item.get("latest_user_message"))
                 rows.append(item)
             return rows
+
+    def conversation_options(self, query: str = "", offset: int = 0, limit: int = 51) -> list[dict]:
+        self.initialize()
+        pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT c.id, COALESCE(NULLIF(n.name,''), NULLIF(c.title,''), 'Conversation sans titre') AS name, "
+                "p.name AS project_name, d.name AS device_name FROM conversations c "
+                "LEFT JOIN conversation_names n ON n.conversation_id=c.id "
+                "LEFT JOIN projects p ON p.id=c.project_id JOIN devices d ON d.id=c.device_id "
+                "WHERE COALESCE(n.name,c.title,'') LIKE ? ESCAPE '\\' "
+                "ORDER BY name COLLATE NOCASE, c.id LIMIT ? OFFSET ?",
+                (pattern, limit, offset))]
 
     def list_devices(self, current_device_id: str) -> list[dict]:
         self.initialize()
@@ -678,6 +697,12 @@ def _device_filter(device, current_device_id, prefix=""):
         return f" AND {'NOT ' if device == 'other' else ''}{expression}", [current_device_id]
     return (f" AND {prefix}device_id IN (SELECT id FROM devices WHERE id=? OR name=? COLLATE NOCASE)",
             [device, device])
+
+
+def _conversation_filter(ids, prefix=""):
+    if not ids:
+        return "", []
+    return f" AND {prefix}id IN ({','.join('?' for _ in ids)})", list(ids)
 
 
 def _fts_query(query: str) -> str:
