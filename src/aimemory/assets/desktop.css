@@ -585,7 +585,8 @@ progress:indeterminate::-webkit-progress-bar {
 }
 .conversation-source {
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 4px 14px;
   margin-top: 4px;
   font-size: 12px;
   color: var(--muted);
@@ -598,7 +599,7 @@ progress:indeterminate::-webkit-progress-bar {
 }
 .conversation-source span:not(.conversation-name) {
   flex: none;
-  max-width: 45%;
+  max-width: 100%;
 }
 .conversation-project {
   color: var(--faint);

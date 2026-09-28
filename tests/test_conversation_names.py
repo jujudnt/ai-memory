@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from dataclasses import replace
+from dataclasses import asdict, replace
 import pytest
 
 from aimemory.db.sqlite import explicit_title
@@ -111,6 +111,13 @@ def test_cloud_names_projects_and_devices_survive_rename_and_rebuild(tmp_path, m
     # Reindexing an old body must not reset renamed metadata.
     b.index_archive(next((b.paths.archive / "sources").rglob("*.json.*")))
     assert b.list_conversations()[0]["project_name"] == "Client Sabai"
+    from aimemory.catalog import publish
+    old_body = a.get_conversation(row["id"])
+    sibling = replace(old_body, id="sibling", source_session_id="sibling")
+    b.accept_conversation(sibling)
+    publish(b, "sibling", "project", asdict(old_body.project), 1)
+    assert {item["project_name"] for item in b.list_conversations()} == {"Client Sabai"}
+    assert len(b.search("Client")) == 2
 
 
 def test_catalog_converges_and_rejects_corruption(tmp_path):

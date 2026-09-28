@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from aimemory.models import NormalizedConversation
+from aimemory.models import NormalizedConversation, ProjectIdentity
 from aimemory.db.codec import pack_text, unpack_text
 from aimemory.adapters.common import title_from_messages
 from aimemory.sources import CODEX_SOURCES
@@ -189,8 +189,13 @@ class MemoryDatabase:
                 (conversation.device.id, conversation.device.name),
             )
             project_id = None
-            if conversation.project:
-                project_id = conversation.project.id
+            project = conversation.project
+            if project:
+                latest = conn.execute("SELECT value FROM conversation_metadata WHERE field='project' "
+                                      "AND json_extract(value, '$.id')=? ORDER BY updated_at DESC, digest DESC LIMIT 1", (project.id,)).fetchone()
+                if latest:
+                    project = ProjectIdentity(**json.loads(latest[0]))
+                project_id = project.id
                 conn.execute(
                     """
                     INSERT OR REPLACE INTO projects(
@@ -198,12 +203,12 @@ class MemoryDatabase:
                     ) VALUES (?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM projects WHERE id = ?), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
                     """,
                     (
-                        conversation.project.id,
-                        conversation.project.name,
-                        conversation.project.cwd,
-                        conversation.project.git_remote,
-                        conversation.project.git_branch,
-                        conversation.project.id,
+                        project.id,
+                        project.name,
+                        project.cwd,
+                        project.git_remote,
+                        project.git_branch,
+                        project.id,
                     ),
                 )
 
@@ -273,7 +278,7 @@ class MemoryDatabase:
                     conversation.id,
                     conversation.source,
                     project_id,
-                    conversation.title or "",
+                    "\n".join(value for value in (conversation.title, project.name if project else None, project.cwd if project else None) if value),
                     conversation.searchable_text(),
                 ),
             )
@@ -554,10 +559,17 @@ class MemoryDatabase:
                                   (project["id"],)).fetchone()
             if newest:
                 project = json.loads(newest[0])
+            previous_project = conn.execute("SELECT name, cwd FROM projects WHERE id=?", (project["id"],)).fetchone()
             conn.execute("INSERT INTO projects(id,name,cwd,git_remote_normalized,default_branch) VALUES (?,?,?,?,?) "
                          "ON CONFLICT(id) DO UPDATE SET name=excluded.name,cwd=excluded.cwd,git_remote_normalized=excluded.git_remote_normalized,default_branch=excluded.default_branch",
                          (project["id"], project["name"], project.get("cwd"), project.get("git_remote"), project.get("git_branch")))
             conn.execute("UPDATE conversations SET project_id=? WHERE id=?", (project["id"], cid))
+            if previous_project and tuple(previous_project) != (project["name"], project.get("cwd")):
+                for sibling in conn.execute("SELECT c.id, COALESCE(n.name,c.title) FROM conversations c "
+                                            "LEFT JOIN conversation_names n ON n.conversation_id=c.id WHERE c.project_id=?", (project["id"],)).fetchall():
+                    title = "\n".join(value for value in (sibling[1], project["name"], project.get("cwd")) if value)
+                    conn.execute("UPDATE conversations_fts SET title=? WHERE rowid IN "
+                                 "(SELECT fts_rowid FROM fts_conversation_rows WHERE conversation_id=?)", (title, sibling[0]))
         row = conn.execute("SELECT c.title, c.project_id, p.name, p.cwd FROM conversations c LEFT JOIN projects p ON p.id=c.project_id WHERE c.id=?", (cid,)).fetchone()
         if row:
             title = "\n".join(str(value) for value in (values.get("name") or row[0], row[2], row[3]) if value)
