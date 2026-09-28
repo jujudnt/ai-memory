@@ -47,6 +47,8 @@ Lors de l'activation, AI Memory installe son exécutable de fond dans `~/.ai-mem
 
 Sur Windows, le composant de fond est installé dans `%LOCALAPPDATA%\AI Memory\bin`. La collecte utilise une tâche à l'ouverture de session, avec un lanceur masqué : aucun terminal n'a besoin de rester ouvert. La tâche reste autorisée sur batterie et ne possède pas de durée limite. L'état du watcher fonctionne aussi sur un Windows non anglophone. Les clients MCP déjà ouverts peuvent continuer leur session pendant le remplacement de leur exécutable ; relancez-les ensuite pour charger la nouvelle version.
 
+Après avoir remplacé l'application par une nouvelle version, utilisez **Réparer** pour mettre également à jour le watcher installé, une fois l'import et la synchronisation terminés. Le simple remplacement du fichier de l'application ne remplace pas le processus de fond déjà en cours.
+
 Sur macOS, l'icône AI Memory dans la barre des menus indique son état :
 
 - icône pleine : collecte active ;
@@ -397,6 +399,8 @@ AI Memory first imports the history already present on the computer. It does not
 When collection is enabled, AI Memory installs its background executable at `~/.ai-memory/bin/ai-memory-cli`. The watcher no longer depends on the location of `AI Memory.app`, so moving or deleting the app after installation does not break collection.
 
 On Windows, the background component is installed in `%LOCALAPPDATA%\AI Memory\bin`. Collection uses a logon task with a hidden launcher: no terminal needs to remain open. The task is allowed on battery power and has no execution time limit. Watcher status also works on non-English Windows installations. Open MCP clients can keep their sessions while the executable is replaced; restart them afterwards to load the new version.
+
+After replacing the application with a newer version, use **Réparer** to update the installed watcher as well, once imports and synchronization have finished. Replacing the application file alone does not replace the background process that is already running.
 
 On macOS, the AI Memory menu-bar icon shows its state:
 

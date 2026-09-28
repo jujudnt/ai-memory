@@ -392,9 +392,53 @@ def _install_windows_task(interval_seconds: float, task_name: str = "AI Memory W
     # A registered task can still be executing the previous version.
     subprocess.run(["schtasks", "/End", "/TN", task_name], check=False, capture_output=True,
                    creationflags=background_creationflags(), timeout=30)
+    _stop_windows_watcher(paths, command)
     subprocess.run(["schtasks", "/Run", "/TN", task_name], check=True, capture_output=True,
                    creationflags=background_creationflags(), timeout=30)
     return InstallResult(True, "Watcher scheduled task installed.", task_name)
+
+
+def _stop_windows_watcher(paths: AppPaths, command: list[str]) -> None:
+    # Ending the scheduled WScript launcher can leave its console child alive.
+    # Never stop a process on the strength of a potentially stale PID alone.
+    lock = FileLock(str(paths.state / "watcher.lock"))
+    try:
+        with lock.acquire(timeout=0):
+            return
+    except Timeout:
+        pass
+
+    import psutil
+
+    try:
+        status = json.loads((paths.state / "watcher-status.json").read_text(encoding="utf-8"))
+        process = psutil.Process(int(status["pid"]))
+        actual = process.cmdline()
+        expected = command[:command.index("watch") + 1]
+        same_command = (len(actual) >= len(expected)
+                        and os.path.normcase(os.path.abspath(actual[0])) == os.path.normcase(os.path.abspath(expected[0]))
+                        and actual[1:len(expected)] == expected[1:])
+        home = Path(process.environ().get("AI_MEMORY_HOME", "~/.ai-memory")).expanduser().resolve()
+        if not same_command or home != paths.home.resolve():
+            raise RuntimeError("Le processus actif ne correspond pas au watcher attendu. Arrêtez-le avant de réparer.")
+        children = process.children(recursive=True)
+        for child in [*children, process]:
+            try:
+                child.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs([*children, process], timeout=10)
+        if alive:
+            raise RuntimeError("Le watcher Windows ne s'est pas arrêté. Réessayez la réparation.")
+    except psutil.NoSuchProcess:
+        pass
+    except (OSError, ValueError, KeyError, psutil.AccessDenied) as exc:
+        raise RuntimeError("Impossible de vérifier le watcher Windows actif. Arrêtez-le avant de réparer.") from exc
+    try:
+        with lock.acquire(timeout=10):
+            pass
+    except Timeout as exc:
+        raise RuntimeError("Le watcher Windows précédent est encore actif. Réessayez la réparation.") from exc
 
 
 def _vbs_string(value: str) -> str:

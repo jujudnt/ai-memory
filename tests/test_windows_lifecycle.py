@@ -42,6 +42,42 @@ def test_task_definition_is_hidden_scoped_and_continuous(tmp_path):
     assert str(launcher) in root.findtext("t:Actions/t:Exec/t:Arguments", namespaces=ns)
 
 
+@pytest.mark.parametrize("mismatch", ["command", "home", None])
+def test_restart_only_stops_verified_watcher(tmp_path, monkeypatch, mismatch):
+    monkeypatch.setenv("AI_MEMORY_HOME", str(tmp_path))
+    paths = installer.AppPaths.from_env()
+    paths.ensure()
+    (paths.state / "watcher-status.json").write_text(json.dumps({"pid": 123}))
+    lock = FileLock(str(paths.state / "watcher.lock"))
+    lock.acquire()
+    stopped = []
+    def terminate():
+        stopped.append(123)
+        lock.release()
+    process = SimpleNamespace(
+        cmdline=lambda: ["helper.exe", "mcp-server" if mismatch == "command" else "watch"],
+        environ=lambda: {"AI_MEMORY_HOME": str(tmp_path / "other" if mismatch == "home" else tmp_path)},
+        children=lambda recursive: [], terminate=terminate,
+    )
+    class NoSuchProcess(Exception):
+        pass
+    class AccessDenied(Exception):
+        pass
+    monkeypatch.setitem(sys.modules, "psutil", SimpleNamespace(
+        Process=lambda pid: process, NoSuchProcess=NoSuchProcess, AccessDenied=AccessDenied,
+        wait_procs=lambda processes, timeout: (processes, [])))
+    try:
+        if mismatch:
+            with pytest.raises(RuntimeError, match="ne correspond pas"):
+                installer._stop_windows_watcher(paths, ["helper.exe", "watch", "--interval", "60"])
+            assert not stopped
+        else:
+            installer._stop_windows_watcher(paths, ["helper.exe", "watch", "--interval", "60"])
+            assert stopped == [123]
+    finally:
+        lock.release()
+
+
 def test_running_runtime_can_be_replaced_and_old_copy_cleaned(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     source, destination = tmp_path / "new.exe", tmp_path / "installed.exe"
@@ -143,6 +179,7 @@ def test_native_scheduled_watcher_runs_hidden_with_correct_environment(tmp_path,
         "import ctypes, json, os, time\nfrom pathlib import Path\nfrom filelock import FileLock\n"
         "home = Path(os.environ['AI_MEMORY_HOME'])\n"
         "with FileLock(str(home / 'state/watcher.lock')):\n"
+        "    (home / 'state/watcher-status.json').write_text(json.dumps({'pid': os.getpid()}))\n"
         "    console = ctypes.windll.kernel32.GetConsoleWindow()\n"
         "    (home / 'probe.json').write_text(json.dumps({'pid': os.getpid(), 'console_visible': bool(ctypes.windll.user32.IsWindowVisible(console)), 'codex': os.environ['CODEX_HOME']}))\n"
         "    while not (home / 'stop').exists(): time.sleep(.1)\n", encoding="utf-8")
