@@ -174,6 +174,8 @@ Chaque machine reconstruit son propre index de recherche à partir des archives 
 
 La vue **Conversations** rassemble les conversations de cet ordinateur et celles reçues des autres appareils du même cloud. Chaque ligne affiche le dernier message utilisateur, puis le client (Codex Desktop, Claude Code, VS Code...), le projet, l'ordinateur d'origine et le nom de la conversation. Les aperçus du message et du nom sont limités à 60 caractères suivis de « ... » ; ouvrez la conversation pour lire ses messages. La recherche porte sur les messages et les noms. Les filtres **Appareil**, **Environnement** et **Conversations** se combinent : ce dernier permet de rechercher des noms dans son menu et de cocher plusieurs conversations. **Afficher la suite** permet de parcourir toute la bibliothèque, pas seulement les dernières conversations.
 
+Les trois filtres partagent le même menu avec recherche intégrée : choix unique pour les appareils et environnements, choix multiple pour les conversations. Échap ou un clic à l'extérieur ferme le menu.
+
 Les noms renommés dans Codex et les changements de projet sont transmis dans de petites fiches `catalog/`, indépendamment des messages : renommer ne renvoie pas toute l'archive. Ils restent recherchables via le MCP après réception. **Installez cette version sur chaque ordinateur** pour que les noms présents uniquement dans son Codex soient publiés. La vue utilise l'index local de la bibliothèque reçue, fonctionne hors ligne et indique l'état de synchronisation ; elle ne prétend pas afficher des conversations que l'autre appareil n'a pas encore envoyées.
 
 ```mermaid
@@ -533,6 +535,8 @@ The **Codex Desktop** or **Codex VS Code** label uses the explicit origin record
 Each machine builds its own search index from downloaded archives. AI Memory does not restore conversations into the native Codex or Claude sidebar; they remain available through AI Memory and MCP.
 
 The **Conversations** view combines conversations from this computer with those received from other devices using the same cloud destination. Each row displays the latest user message, followed by its client (Codex Desktop, Claude Code, VS Code...), project, originating computer and conversation name. Message and name previews are capped at 60 characters followed by "..."; open the conversation to read its messages. Search matches both messages and names. The **Device**, **Environment** and **Conversations** filters work together; the conversation dropdown includes name search and multiple selection. **Show more** browses the whole library, not just recent conversations.
+
+All three filters share the same searchable dropdown: single selection for devices and environments, multiple selection for conversations. Escape or a click outside closes the menu.
 
 Codex renames and project changes travel as small `catalog/` records, independently of messages: a rename does not re-upload the conversation archive. Names remain searchable through MCP after reception. **Update every computer** so names stored only in its Codex installation can be published. The view uses the local index of the received library, works offline and displays synchronization status; it cannot show conversations the other device has not uploaded yet.
 

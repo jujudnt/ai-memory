@@ -365,6 +365,7 @@ async function loadDevices() {
       select.append(option);
     }
     select.value = selected;
+    select.dispatchEvent(new Event("filter-options-updated"));
   } catch { /* Keep the current device selection on a temporary network failure. */ }
 }
 function updateConversationSelection() {
@@ -416,15 +417,21 @@ async function loadConversationOptions(append = false) {
   } finally { if (seq === optionSeq) $("#conversation-filter-more").disabled = false; }
 }
 $("#conversation-filter").addEventListener("toggle", () => {
-  if ($("#conversation-filter").open) { positionConversationMenu(); loadConversationOptions(); }
+  if ($("#conversation-filter").open) {
+    document.querySelectorAll(".library-filters details[open]").forEach(filter => {
+      if (filter.id !== "conversation-filter") filter.open = false;
+    });
+    positionConversationMenu();
+    loadConversationOptions();
+  }
 });
-function positionConversationMenu() {
-  const menu = $(".conversation-filter-menu");
+function positionConversationMenu(filter = $("#conversation-filter")) {
+  const menu = filter.querySelector(".conversation-filter-menu");
   menu.style.left = "0px";
   menu.style.top = "calc(100% + 6px)";
   menu.style.bottom = "auto";
   menu.style.maxHeight = "";
-  const anchor = $("#conversation-filter summary").getBoundingClientRect();
+  const anchor = filter.querySelector("summary").getBoundingClientRect();
   const height = window.visualViewport?.height || window.innerHeight;
   const below = height - anchor.bottom - 22, above = anchor.top - 22;
   const flip = menu.scrollHeight > below && above > below;
@@ -433,12 +440,11 @@ function positionConversationMenu() {
   const bounds = menu.getBoundingClientRect();
   menu.style.left = `${Math.min(0, window.innerWidth - 16 - bounds.right)}px`;
 }
-window.addEventListener("resize", () => {
-  if ($("#conversation-filter").open) positionConversationMenu();
-});
-window.visualViewport?.addEventListener("resize", () => {
-  if ($("#conversation-filter").open) positionConversationMenu();
-});
+function positionOpenFilters() {
+  document.querySelectorAll(".library-filters details[open]").forEach(positionConversationMenu);
+}
+window.addEventListener("resize", positionOpenFilters);
+window.visualViewport?.addEventListener("resize", positionOpenFilters);
 $("#conversation-filter-search").addEventListener("input", () => {
   clearTimeout(optionTimer);
   optionSeq += 1;
@@ -451,14 +457,79 @@ $("#conversation-filter-clear").addEventListener("click", () => {
   loadConversations();
 });
 document.addEventListener("click", event => {
-  if (!$("#conversation-filter").contains(event.target)) $("#conversation-filter").open = false;
+  document.querySelectorAll(".library-filters details[open]").forEach(filter => {
+    if (!filter.contains(event.target)) filter.open = false;
+  });
 });
-$("#conversation-filter").addEventListener("keydown", event => {
-  if (event.key === "Escape") {
-    $("#conversation-filter").open = false;
-    $("#conversation-filter summary").focus();
-  }
+$(".library-filters").addEventListener("keydown", event => {
+  const filter = event.target.closest("details");
+  if (event.key !== "Escape" || !filter?.open) return;
+  event.preventDefault();
+  filter.open = false;
+  filter.querySelector("summary").focus();
 });
+function enhanceSingleFilter(id, placeholder) {
+  const select = $("#" + id);
+  const filter = document.createElement("details");
+  filter.id = id + "-menu";
+  filter.className = "conversation-filter";
+  filter.innerHTML = '<summary><span></span><i data-lucide="chevron-down"></i></summary><div class="conversation-filter-menu"><input type="search" autocomplete="off"><div class="conversation-filter-options" role="radiogroup"></div><p class="filter-empty" role="status" hidden>Aucun résultat.</p></div>';
+  const summary = filter.querySelector("summary span");
+  const search = filter.querySelector('input[type="search"]');
+  const options = filter.querySelector(".conversation-filter-options");
+  search.placeholder = placeholder;
+  search.setAttribute("aria-label", placeholder);
+  options.setAttribute("aria-label", select.getAttribute("aria-label"));
+  const filterOptions = () => {
+    const term = search.value.trim().toLocaleLowerCase("fr");
+    let count = 0;
+    options.querySelectorAll("label").forEach(label => {
+      label.hidden = !label.textContent.toLocaleLowerCase("fr").includes(term);
+      if (!label.hidden) count += 1;
+    });
+    filter.querySelector(".filter-empty").hidden = count > 0;
+    if (filter.open) positionConversationMenu(filter);
+  };
+  const update = () => {
+    const title = select.selectedOptions[0]?.textContent || select.options[0].textContent;
+    summary.textContent = title;
+    summary.title = title;
+    options.querySelectorAll("input").forEach(input => { input.checked = input.value === select.value; });
+    if (filter.open) positionConversationMenu(filter);
+  };
+  const renderOptions = () => {
+    options.replaceChildren();
+    for (const option of select.options) {
+      const label = document.createElement("label"), input = document.createElement("input"), text = document.createElement("span");
+      input.type = "radio";
+      input.name = id;
+      input.value = option.value;
+      text.textContent = option.textContent;
+      input.addEventListener("change", () => {
+        select.value = input.value;
+        select.dispatchEvent(new Event("change"));
+      });
+      label.append(input, text);
+      options.append(label);
+    }
+    update();
+    filterOptions();
+  };
+  search.addEventListener("input", filterOptions);
+  select.addEventListener("change", update);
+  select.addEventListener("filter-options-updated", renderOptions);
+  filter.addEventListener("toggle", () => {
+    if (filter.open) {
+      document.querySelectorAll(".library-filters details[open]").forEach(other => { if (other !== filter) other.open = false; });
+      filterOptions();
+    }
+  });
+  select.after(filter);
+  select.hidden = true;
+  renderOptions();
+}
+enhanceSingleFilter("device-filter", "Rechercher un appareil");
+enhanceSingleFilter("source-filter", "Rechercher un environnement");
 let detailId = null, detailOffset = 0, detailSeq = 0;
 async function openConversation(row) {
   detailId = row.id;
