@@ -75,7 +75,7 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "dist/AI Memory.app/Contents/Info.plist"
           APP_VERSION="$(python -c 'from aimemory import __version__; print(__version__)')"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "dist/AI Memory.app/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "dist/AI Memory.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $APP_VERSION" "dist/AI Memory.app/Contents/Info.plist"
           cp "dist/ai-memory-cli" "dist/AI Memory.app/Contents/MacOS/ai-memory-cli"
           cp vendor/rclone "dist/AI Memory.app/Contents/MacOS/rclone"
           cp vendor/rclone-COPYING.txt "dist/AI Memory.app/Contents/Resources/rclone-COPYING.txt"

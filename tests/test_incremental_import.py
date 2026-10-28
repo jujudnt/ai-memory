@@ -157,13 +157,34 @@ def test_source_changed_during_capture_is_retried(tmp_path, monkeypatch):
     source = tmp_path / "a.jsonl"
     source.write_bytes(encoded({"message": "first"}))
     original = Path.stat
+    calls = 0
     def modified(path, *args, **kwargs):
+        nonlocal calls
         if path == source:
-            source.write_bytes(encoded({"message": "second"}))
+            calls += 1
+            if calls == 2:
+                source.write_bytes(encoded({"message": "second"}))
         return original(path, *args, **kwargs)
     monkeypatch.setattr(Path, "stat", modified)
     with pytest.raises(SourceChanged):
         SourceSnapshot(source, tmp_path)
+
+
+def test_snapshot_accepts_distinct_path_and_descriptor_ctime(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+    source = tmp_path / "a.jsonl"
+    source.write_bytes(b"{}\n")
+    original = os.fstat
+    def windows_stat(fd):
+        value = original(fd)
+        fields = {name: getattr(value, name) for name in dir(value) if name.startswith("st_")}
+        fields["st_ctime_ns"] += 123456
+        return SimpleNamespace(**fields)
+    monkeypatch.setattr(os, "fstat", windows_stat)
+    with SourceSnapshot(source, tmp_path) as snapshot:
+        assert snapshot.digest == hashlib.sha256(b"{}\n").hexdigest()
+        assert snapshot.stat.st_ctime_ns == source.stat().st_ctime_ns
 
 
 def test_cache_is_lru_and_has_four_session_limit(tmp_path):

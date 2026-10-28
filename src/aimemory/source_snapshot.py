@@ -25,8 +25,16 @@ class SourceSnapshot:
         digest = hashlib.sha256()
         try:
             with path.open("rb") as source:
-                self.stat = os.fstat(source.fileno())
-                self.size = self.stat.st_size
+                descriptor_stat = os.fstat(source.fileno())
+                self.stat = path.stat()
+                # Windows Python 3.12+ can report change time through fstat
+                # and creation time through stat. Compare each clock with its
+                # own API, while checking identity and content stamps across both.
+                if (descriptor_stat.st_size, descriptor_stat.st_mtime_ns, descriptor_stat.st_dev, descriptor_stat.st_ino) != (
+                    self.stat.st_size, self.stat.st_mtime_ns, self.stat.st_dev, self.stat.st_ino
+                ):
+                    raise SourceChanged(str(path))
+                self.size = descriptor_stat.st_size
                 boundaries = sorted({n for n in prefix_lengths if isinstance(n, int) and 0 < n < self.size} | {self.size})
                 position = 0
                 for boundary in boundaries:
@@ -38,7 +46,7 @@ class SourceSnapshot:
                         digest.update(chunk)
                         position += len(chunk)
                     self.prefix_digests[boundary] = digest.hexdigest()
-                if signature(os.fstat(source.fileno())) != signature(self.stat) or signature(path.stat()) != signature(self.stat):
+                if signature(os.fstat(source.fileno())) != signature(descriptor_stat) or signature(path.stat()) != signature(self.stat):
                     raise SourceChanged(str(path))
             self.digest = digest.hexdigest()
             self.stream.seek(max(0, self.size - 1))
