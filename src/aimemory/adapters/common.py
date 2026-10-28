@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import io
 import platform
 import socket
 import uuid
@@ -28,21 +29,35 @@ def conversation_id(source: str, source_session_id: str) -> str:
     return str(uuid.UUID(digest[:32]))
 
 
+def iter_jsonl(path: Path, raw=None, offset=0, state=None):
+    owned = not hasattr(raw, "stream")
+    stream = (path.open("rb") if raw is None else io.BytesIO(raw)) if owned else raw.stream
+    try:
+        stream.seek(offset)
+        line = stream.readline()
+        index = 0
+        while line:
+            following = stream.readline()
+            index += 1
+            if line.strip():
+                try:
+                    value = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    if following:
+                        raise ValueError(f"Invalid JSON in {path.name}, line {index}")
+                    if state is not None:
+                        state["partial"] = True
+                else:
+                    if isinstance(value, dict):
+                        yield value
+            line = following
+    finally:
+        if owned:
+            stream.close()
+
+
 def read_jsonl(path: Path, raw: bytes | None = None) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    lines = (raw if raw is not None else path.read_bytes()).splitlines()
-    for index, line in enumerate(lines):
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            if index == len(lines) - 1:
-                continue
-            raise ValueError(f"Invalid JSON in {path.name}, line {index + 1}")
-        if isinstance(value, dict):
-            records.append(value)
-    return records
+    return list(iter_jsonl(path, raw))
 
 
 def stringify(value: Any) -> str | None:

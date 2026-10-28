@@ -129,6 +129,7 @@ def test_sync_cooldown_starts_after_completion(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("current", [0, 15])
 def test_background_watcher_only_lowers_priority(tmp_path, monkeypatch, current):
+    monkeypatch.setattr("aimemory.processes.sys", SimpleNamespace(platform="linux"))
     monkeypatch.setenv("AI_MEMORY_HOME", str(tmp_path))
     paths = AppPaths.from_env()
     paths.ensure()

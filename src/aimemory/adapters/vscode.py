@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from aimemory.adapters.base import DiscoveredSource, SourceSession
-from aimemory.adapters.common import conversation_id, device_identity, extract_text, read_jsonl, title_from_messages
+from aimemory.adapters.common import conversation_id, device_identity, extract_text, iter_jsonl, title_from_messages
 from aimemory.models import Message, NormalizedConversation
 from aimemory.projects import identify_project
 
@@ -47,9 +47,25 @@ class VSCodeAdapter:
         return sessions
 
     def parse_session(self, path: Path, raw: bytes | None = None) -> NormalizedConversation:
-        records = ([json.loads(raw if raw is not None else path.read_bytes())]
-                   if path.suffix == ".json" else read_jsonl(path, raw))
-        state = _restore_session(records)
+        return self.parse_incremental(path, raw)[0]
+
+    def parse_incremental(self, path, raw, state=None, offset=0):
+        cached = state if state is not None else {}
+        if path.suffix == ".json":
+            if hasattr(raw, "stream"):
+                raw.stream.seek(0)
+                records = [json.load(raw.stream)]
+            else:
+                records = [json.loads(raw if raw is not None else path.read_bytes())]
+            cached = {"partial": True}  # Only append-only JSONL journals may reuse parser state.
+        else:
+            records = iter_jsonl(path, raw, offset, cached)
+        def counted():
+            for record in records:
+                cached["count"] = cached.get("count", 0) + 1
+                yield record
+        state = _restore_session(counted(), cached.get("session"))
+        cached["session"] = state
         messages: list[Message] = []
         created_at = None
         updated_at = None
@@ -108,10 +124,10 @@ class VSCodeAdapter:
             commands=[],
             metadata={
                 "source_path": str(path),
-                "raw_record_count": len(records),
+                "raw_record_count": cached["count"],
                 "parser_version": self.parser_version,
             },
-        )
+        ), cached
 
     def identify_project(self, conversation: NormalizedConversation):
         return conversation.project
@@ -172,9 +188,8 @@ def _response_text(request: dict[str, Any]) -> str:
     return extract_text(response)
 
 
-def _restore_session(records: list[dict]) -> dict:
+def _restore_session(records, state=None) -> dict:
     # VS Code's ObjectMutationLog: initial, set, push/splice, delete.
-    state = None
     for record in records:
         kind = record.get("kind")
         if kind is None:

@@ -12,6 +12,8 @@ from aimemory.state import read_json, write_json
 from filelock import FileLock, Timeout
 from aimemory import __version__
 from aimemory.cleanup import run_auto_cleanup, compact_search_index
+from aimemory.processes import lower_background_priority
+from aimemory.watcher.events import SourceEvents
 
 
 @dataclass(slots=True)
@@ -28,10 +30,11 @@ class WatcherStatus:
     total_scans: int = 0
     pid: int = 0
     version: str = __version__
+    collection_mode: str = "polling"
 
 
 class WatcherService:
-    """Simple polling collector used until platform services are wired in.
+    """Event-driven collector with periodic reconciliation and polling fallback.
 
     The desktop app can read the same status file to show whether collection is
     alive and when the last successful Codex import happened.
@@ -54,23 +57,45 @@ class WatcherService:
         except Timeout:
             return
         self.status.running = True
-        # Only the background collector yields CPU priority, not the GUI or MCP.
-        if not once and hasattr(os, "setpriority"):
-            try:
-                priority = os.getpriority(os.PRIO_PROCESS, 0)
-                os.setpriority(os.PRIO_PROCESS, 0, max(priority, 10))
-            except OSError:
-                pass
+        if not once:
+            lower_background_priority()
+        events = SourceEvents(self.service.paths.state, codex_home)
+        native = not once and events.start()
+        self.status.collection_mode = "events" if native else "polling"
         self.status.pid = os.getpid()
         self.status.started_at = _now()
         self._write_status()
         try:
+            last_scan = float("-inf")
+            idle_interval = max(interval_seconds, 60.0)
             while True:
-                self.scan_once(codex_home)
+                current = time.monotonic()
+                due = current - last_scan >= (idle_interval if native else interval_seconds)
+                if due or (native and events.changed.is_set() and current - last_scan >= interval_seconds):
+                    events.changed.clear()
+                    self.scan_once(codex_home)
+                    last_scan = time.monotonic()
+                    if native:
+                        try:
+                            events.refresh()
+                            native = events.alive
+                        except (OSError, RuntimeError):
+                            native = False
+                        if not native:
+                            events.close()
+                            self.status.collection_mode = "polling"
+                else:
+                    self._maybe_sync()
                 if once:
                     break
-                time.sleep(interval_seconds)
+                if native:
+                    # Requests wake immediately; source bursts coalesce at the normal interval.
+                    events.requested.wait(timeout=interval_seconds)
+                    events.requested.clear()
+                else:
+                    time.sleep(interval_seconds)
         finally:
+            events.close()
             self.status.running = False
             self._write_status()
             lock.release()
@@ -97,6 +122,9 @@ class WatcherService:
         # Index maintenance is local work, including when cloud sync is paused,
         # offline, or waiting to retry. Its own locks defer it during transfers.
         compact_search_index(self.service.paths)
+        self._maybe_sync()
+
+    def _maybe_sync(self) -> None:
         # Cloud failures do not erase the collector's independent health signal.
         thread = getattr(self, "_sync_thread", None)
         sync_status = read_json(self.service.paths.state / "sync-status.json")

@@ -120,6 +120,7 @@ def main() -> None:
                     time.sleep(1)
                 assert status["conversation_count"] == 1, status
                 assert status["watcher"]["last_error"] is None, status
+                assert status["watcher"]["collection_mode"] == "events", status
                 assert any(name.startswith("ai-memory") and name.endswith("SystemTrayIcon")
                            for name, _ in windows().values()), "Tray window not registered"
                 assert not failures, failures

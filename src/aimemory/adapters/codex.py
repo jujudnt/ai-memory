@@ -6,7 +6,7 @@ import platform
 import sqlite3
 import socket
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +17,7 @@ from aimemory.models import DeviceIdentity, Message, NormalizedConversation, Pro
 from aimemory.projects import identify_project
 from aimemory.sources import codex_source
 from aimemory.adapters.codex_messages import deduplicate_messages, NORMALIZATION_VERSION
+from aimemory.adapters.common import iter_jsonl
 
 
 class CodexAdapter:
@@ -63,16 +64,23 @@ class CodexAdapter:
         return sessions
 
     def parse_session(self, path: Path, raw: bytes | None = None) -> NormalizedConversation:
-        records = _read_jsonl(path, raw)
-        session_meta: dict[str, Any] = {}
-        turn_context: dict[str, Any] = {}
-        messages: list[Message] = []
-        tool_calls: list[ToolCall] = []
-        files: set[str] = set()
-        commands: list[str] = []
-        call_outputs: dict[str, str] = {}
+        return self.parse_incremental(path, raw)[0]
 
-        for ordinal, record in enumerate(records):
+    def parse_incremental(self, path, raw, state=None, offset=0):
+        state = state if state is not None else {}
+        session_meta = state.setdefault("session_meta", {})
+        turn_context = state.setdefault("turn_context", {})
+        messages = state.setdefault("messages", [])
+        tool_calls = state.setdefault("tool_calls", [])
+        files = state.setdefault("files", set())
+        commands = state.setdefault("commands", [])
+        call_outputs = state.setdefault("outputs", {})
+        for record in iter_jsonl(path, raw, offset, state):
+            ordinal = state.get("count", 0)
+            state["count"] = ordinal + 1
+            if isinstance(record.get("timestamp"), str):
+                state.setdefault("first_timestamp", record["timestamp"])
+                state["last_timestamp"] = record["timestamp"]
             payload = record.get("payload") if isinstance(record.get("payload"), dict) else record
             record_type = record.get("type") or payload.get("type")
             timestamp = record.get("timestamp") or payload.get("timestamp")
@@ -145,9 +153,7 @@ class CodexAdapter:
                 output = _stringify(item.get("output") or item)
                 call_outputs[call_id] = output
 
-        for call in tool_calls:
-            if call.id in call_outputs:
-                call.output = call_outputs[call.id]
+        resolved_calls = [replace(call, output=call_outputs.get(call.id)) for call in tool_calls]
 
         source_session_id = str(
             session_meta.get("id")
@@ -155,8 +161,8 @@ class CodexAdapter:
             or _session_id_from_path(path)
         )
         thread_meta = self.thread_metadata.get(source_session_id) or self.thread_metadata.get(str(path)) or {}
-        created_at = session_meta.get("timestamp") or _timestamp(thread_meta.get("created_at")) or _first_timestamp(records)
-        updated_at = _last_timestamp(records) or _timestamp(thread_meta.get("updated_at")) or created_at
+        created_at = session_meta.get("timestamp") or _timestamp(thread_meta.get("created_at")) or state.get("first_timestamp")
+        updated_at = state.get("last_timestamp") or _timestamp(thread_meta.get("updated_at")) or created_at
         cwd = turn_context.get("cwd") or session_meta.get("cwd") or thread_meta.get("cwd")
         git = session_meta.get("git") if isinstance(session_meta.get("git"), dict) else {}
         git_remote = git.get("remote_url") or git.get("remote") or git.get("repository_url")
@@ -180,12 +186,12 @@ class CodexAdapter:
             model=model,
             title=title,
             messages=deduplicate_messages(messages),
-            tool_calls=tool_calls,
+            tool_calls=resolved_calls,
             files_referenced=sorted(files),
-            commands=commands,
+            commands=list(commands),
             metadata={
                 "source_path": str(path),
-                "raw_record_count": len(records),
+                "raw_record_count": state.get("count", 0),
                 "codex_cli_version": session_meta.get("cli_version"),
                 "history_mode": session_meta.get("history_mode"),
                 "parser_version": self.parser_version,
@@ -193,30 +199,16 @@ class CodexAdapter:
                 "codex_thread_source": thread_meta.get("source"),
                 "codex_project": asdict(codex_project) if codex_project else None,
                 "code_project": asdict(code_project) if code_project else None,
-                "session_metadata": session_meta,
+                "session_metadata": dict(session_meta),
             },
-        )
+        ), state
 
     def identify_project(self, conversation: NormalizedConversation):
         return conversation.project
 
 
 def _read_jsonl(path: Path, raw: bytes | None = None) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    lines = (raw if raw is not None else path.read_bytes()).splitlines()
-    for index, line in enumerate(lines):
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            # A live session may end in a partially written record, never skip corruption inside it.
-            if index == len(lines) - 1:
-                continue
-            raise ValueError(f"Invalid JSON in {path.name}, line {index + 1}")
-        if isinstance(value, dict):
-            records.append(value)
-    return records
+    return list(iter_jsonl(path, raw))
 
 
 def _stable_device_id() -> str:

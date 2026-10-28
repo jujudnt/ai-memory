@@ -14,6 +14,8 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -27,3 +29,11 @@ jobs:
       - run: npm ci
       - run: pytest -q
       - run: npm test
+      - name: Measure synthetic collection CPU and memory
+        if: matrix.python-version == '3.12'
+        run: python scripts/benchmark_collector.py --output benchmark.json
+      - uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.12'
+        with:
+          name: benchmark-${{ matrix.os }}
+          path: benchmark.json
