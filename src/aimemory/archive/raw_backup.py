@@ -5,6 +5,8 @@ import gzip
 import hashlib
 import json
 import re
+import os
+import tempfile
 from pathlib import Path
 
 from aimemory.state import atomic_write
@@ -14,6 +16,8 @@ RAW_PATTERN = r"raw/[a-zA-Z0-9_-]+/[a-f0-9]{64}\.(?:jsonl|delta\.json)\.gz"
 
 
 def write_raw(root: Path, conversation_id: str, raw: bytes, digest: str, previous: dict) -> Path:
+    if hasattr(raw, "stream"):
+        return _write_snapshot(root, conversation_id, raw, previous)
     path = Path("raw") / conversation_id / f"{digest}.jsonl.gz"
     length = previous.get("size", 0)
     parent = Path(previous.get("raw_path", "")).as_posix()
@@ -29,6 +33,45 @@ def write_raw(root: Path, conversation_id: str, raw: bytes, digest: str, previou
     if not (root / path).exists():
         atomic_write(root / path, gzip.compress(payload, compresslevel=6, mtime=0))
     return path
+
+
+def _write_snapshot(root, conversation_id, snapshot, previous):
+    """Write the same portable backup format without loading the history in RAM."""
+    length = previous.get("size", 0)
+    parent = Path(previous.get("raw_path", "")).as_posix()
+    delta = (0 < length < snapshot.size and re.fullmatch(RAW_PATTERN, parent)
+             and ((root / parent).is_file() or previous.get("raw_backed_up"))
+             and previous.get("raw_depth", 0) < 32
+             and snapshot.prefix_digests.get(length) == previous.get("sha256"))
+    suffix = "delta.json.gz" if delta else "jsonl.gz"
+    relative = Path("raw") / conversation_id / f"{snapshot.digest}.{suffix}"
+    target = root / relative
+    if target.exists():
+        return relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=target.parent, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "wb") as output:
+            with gzip.GzipFile(fileobj=output, mode="wb", filename="", compresslevel=6, mtime=0) as compressed:
+                if delta:
+                    header = json.dumps({"parent": parent, "prefix_size": length})[:-1]
+                    compressed.write((header + ', "append": "').encode())
+                    remaining = b""
+                    for chunk in snapshot.chunks(length):
+                        chunk = remaining + chunk
+                        boundary = len(chunk) // 3 * 3
+                        compressed.write(base64.b64encode(chunk[:boundary]))
+                        remaining = chunk[boundary:]
+                    compressed.write(base64.b64encode(remaining) + b'"}')
+                else:
+                    for chunk in snapshot.chunks():
+                        compressed.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(name, target)
+    finally:
+        Path(name).unlink(missing_ok=True)
+    return relative
 
 
 def read_raw(root: Path, relative: str) -> bytes:

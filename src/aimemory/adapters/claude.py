@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from aimemory.adapters.base import DiscoveredSource, SourceSession
@@ -10,9 +11,7 @@ from aimemory.adapters.common import (
     device_identity,
     extract_file_mentions,
     extract_text,
-    first_timestamp,
-    last_timestamp,
-    read_jsonl,
+    iter_jsonl,
     stringify,
     title_from_messages,
 )
@@ -44,20 +43,28 @@ class ClaudeAdapter:
         return sessions
 
     def parse_session(self, path: Path, raw: bytes | None = None) -> NormalizedConversation:
-        records = read_jsonl(path, raw)
-        messages: list[Message] = []
-        tool_calls: list[ToolCall] = []
-        files: set[str] = set()
-        commands: list[str] = []
-        source_session_id = path.stem
-        cwd = None
-        git_branch = None
-        model = None
-        entrypoint = None
-        outputs: dict[str, str] = {}
+        return self.parse_incremental(path, raw)[0]
+
+    def parse_incremental(self, path, raw, state=None, offset=0):
+        state = state if state is not None else {}
+        messages = state.setdefault("messages", [])
+        tool_calls = state.setdefault("tool_calls", [])
+        files = state.setdefault("files", set())
+        commands = state.setdefault("commands", [])
+        source_session_id = state.get("source_session_id", path.stem)
+        cwd = state.get("cwd")
+        git_branch = state.get("git_branch")
+        model = state.get("model")
+        entrypoint = state.get("entrypoint")
+        outputs = state.setdefault("outputs", {})
         project_dir = _project_dir(path, self.claude_home)
 
-        for ordinal, record in enumerate(records):
+        for record in iter_jsonl(path, raw, offset, state):
+            ordinal = state.get("count", 0)
+            state["count"] = ordinal + 1
+            if isinstance(record.get("timestamp"), str):
+                state.setdefault("first_timestamp", record["timestamp"])
+                state["last_timestamp"] = record["timestamp"]
             if isinstance(record.get("sessionId"), str):
                 source_session_id = record["sessionId"]
             cwd = cwd or record.get("cwd")
@@ -105,12 +112,12 @@ class ClaudeAdapter:
                 if name == "Bash" and isinstance(item.get("input"), dict) and isinstance(item["input"].get("command"), str):
                     commands.append(item["input"]["command"])
 
+        state.update(source_session_id=source_session_id, cwd=cwd, git_branch=git_branch, model=model, entrypoint=entrypoint)
         parent_session_id = None
         if path.parent.name == "subagents":
             parent_session_id = source_session_id
             source_session_id = f"{source_session_id}:subagent:{path.stem}"
-        for call in tool_calls:
-            call.output = outputs.get(call.id)
+        resolved_calls = [replace(call, output=outputs.get(call.id)) for call in tool_calls]
         cwd = cwd or _cwd_from_project_dir(project_dir)
         actual_source = _source_from_entrypoint(entrypoint)
         return NormalizedConversation(
@@ -118,26 +125,26 @@ class ClaudeAdapter:
             id=conversation_id(self.source, source_session_id),
             source=actual_source,
             source_session_id=source_session_id,
-            created_at=first_timestamp(records),
-            updated_at=last_timestamp(records) or first_timestamp(records),
+            created_at=state.get("first_timestamp"),
+            updated_at=state.get("last_timestamp") or state.get("first_timestamp"),
             device=self.device,
             project=identify_project(cwd, None, git_branch),
             model=model,
             title=_custom_title(path) or title_from_messages(messages),
-            messages=messages,
-            tool_calls=tool_calls,
+            messages=list(messages),
+            tool_calls=resolved_calls,
             files_referenced=sorted(files),
-            commands=commands,
+            commands=list(commands),
             metadata={
                 "source_path": str(path),
-                "raw_record_count": len(records),
+                "raw_record_count": state.get("count", 0),
                 "parser_version": self.parser_version,
                 "claude_entrypoint": entrypoint,
                 "claude_project_dir": project_dir,
                 "claude_client": actual_source,
                 "parent_session_id": parent_session_id,
             },
-        )
+        ), state
 
     def identify_project(self, conversation: NormalizedConversation):
         return conversation.project

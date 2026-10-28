@@ -27,6 +27,7 @@ from aimemory.sources import CODEX_SOURCES
 from aimemory.search import SearchService
 from aimemory.state import atomic_write, now, read_json, write_json
 from aimemory.storage_usage import storage_usage
+from aimemory.source_snapshot import SourceSnapshot, SourceChanged, ParseCache
 
 
 @dataclass(slots=True)
@@ -50,6 +51,7 @@ class MemoryService:
         self._storage_checked = 0.0
         self._storage_lock = threading.Lock()
         self._snapshot_cache = {}
+        self._parse_cache = ParseCache()
 
     def import_codex(self, codex_home: Path | None = None, force: bool = False) -> ImportResult:
         with self.lock:
@@ -154,10 +156,17 @@ class MemoryService:
         errors = []
         for session in sessions:
             entry = manifest.get(str(session.path), {})
+            try:
+                current_stat = session.path.stat()
+            except FileNotFoundError:
+                skipped += 1
+                continue
             if (
                 not force
                 and entry.get("size") == session.size
-                and entry.get("mtime_ns") == session.path.stat().st_mtime_ns
+                and entry.get("mtime_ns") == current_stat.st_mtime_ns
+                and entry.get("ctime_ns") == current_stat.st_ctime_ns
+                and entry.get("inode") == current_stat.st_ino
                 and entry.get("parser_version") == getattr(adapter, "parser_version", 2)
                 and (
                     (self.paths.archive / entry.get("raw_path", "missing")).is_file()
@@ -168,38 +177,54 @@ class MemoryService:
                 skipped += 1
                 continue
             try:
-                stat = session.path.stat()
-                raw = session.path.read_bytes()
-                stat_hash = hashlib.sha256(raw).hexdigest()
-                if (not force and stat_hash == entry.get("sha256")
+                cache_key = (adapter.source, str(session.path), getattr(adapter, "parser_version", 2))
+                cached = self._parse_cache.pop(cache_key)
+                with SourceSnapshot(session.path, self.paths.cache, (entry.get("size", 0), cached[0] if cached else 0)) as raw:
+                    stat = raw.stat
+                    stat_hash = raw.digest
+                    if (not force and stat_hash == entry.get("sha256")
                         and entry.get("parser_version") == getattr(adapter, "parser_version", 2)
                         and entry.get("conversation_id") in indexed_ids
                         and ((self.paths.archive / entry.get("raw_path", "missing")).is_file()
                              or synced_objects.get(entry.get("raw_path", "")))):
-                    entry.update(mtime_ns=stat.st_mtime_ns, size=len(raw))
-                    write_json(manifest_path, manifest)
-                    skipped += 1
-                    continue
-                conversation = adapter.parse_session(session.path, raw)
-                previous = dict(entry, raw_backed_up=bool(synced_objects.get(entry.get("raw_path", ""))))
-                raw_path = write_raw(self.paths.archive, conversation.id, raw, stat_hash, previous)
-                conversation.metadata.update(source_sha256=stat_hash, raw_path=raw_path.as_posix())
-                # Preserve every source variant; the active index selects the latest revision.
-                self.accept_conversation(conversation)
-                with self.db.connect() as conn:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO imports(source, source_path, source_session_id, file_hash, size, mtime, last_offset) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (adapter.source, str(session.path), conversation.source_session_id, stat_hash, len(raw), stat.st_mtime, len(raw)),
-                    )
-                manifest[str(session.path)] = {
-                    "conversation_id": conversation.id, "source_session_id": conversation.source_session_id,
-                    "sha256": stat_hash, "raw_path": raw_path.as_posix(), "size": len(raw),
-                    "mtime_ns": stat.st_mtime_ns, "parser_version": getattr(adapter, "parser_version", 2),
-                    "messages": len(conversation.messages), "tool_calls": len(conversation.tool_calls),
-                    "raw_depth": entry.get("raw_depth", 0) + 1 if raw_path.name.endswith(".delta.json.gz") else 0,
-                }
+                        entry.update(mtime_ns=stat.st_mtime_ns, ctime_ns=stat.st_ctime_ns, inode=stat.st_ino, size=raw.size)
+                        if cached and cached[0] == raw.size and cached[1] == stat_hash:
+                            self._parse_cache.put(cache_key, raw, cached[2])
+                        write_json(manifest_path, manifest)
+                        skipped += 1
+                        continue
+                    parse_state = None
+                    if hasattr(adapter, "parse_incremental"):
+                        append = (not force and cached and raw.size > cached[0]
+                                  and raw.prefix_digests.get(cached[0]) == cached[1])
+                        conversation, parse_state = adapter.parse_incremental(
+                            session.path, raw, cached[2] if append else None, cached[0] if append else 0)
+                    else:
+                        conversation = adapter.parse_session(session.path, raw)
+                    previous = dict(entry, raw_backed_up=bool(synced_objects.get(entry.get("raw_path", ""))))
+                    raw_path = write_raw(self.paths.archive, conversation.id, raw, stat_hash, previous)
+                    conversation.metadata.update(source_sha256=stat_hash, raw_path=raw_path.as_posix())
+                    # Preserve every source variant; the active index selects the latest revision.
+                    self.accept_conversation(conversation)
+                    with self.db.connect() as conn:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO imports(source, source_path, source_session_id, file_hash, size, mtime, last_offset) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (adapter.source, str(session.path), conversation.source_session_id, stat_hash, raw.size, stat.st_mtime, raw.size),
+                        )
+                    manifest[str(session.path)] = {
+                        "conversation_id": conversation.id, "source_session_id": conversation.source_session_id,
+                        "sha256": stat_hash, "raw_path": raw_path.as_posix(), "size": raw.size,
+                        "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns, "inode": stat.st_ino,
+                        "parser_version": getattr(adapter, "parser_version", 2),
+                        "messages": len(conversation.messages), "tool_calls": len(conversation.tool_calls),
+                        "raw_depth": entry.get("raw_depth", 0) + 1 if raw_path.name.endswith(".delta.json.gz") else 0,
+                    }
+                    if parse_state is not None:
+                        self._parse_cache.put(cache_key, raw, parse_state)
                 imported += 1
                 indexed_ids.add(conversation.id)
+            except SourceChanged:
+                skipped += 1  # The manifest stays unchanged; the next scan retries.
             except ValueError as exc:
                 if "session is empty" in str(exc):
                     skipped += 1

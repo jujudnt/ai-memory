@@ -4,19 +4,19 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-memory"
-version = "0.4.37"
+version = "0.4.38"
 description = "Local-first portable memory for AI coding assistant conversations."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "AI Memory contributors" }]
-dependencies = ["filelock>=3.16", "zstandard>=0.23", "psutil>=6; sys_platform == 'win32'"]
+dependencies = ["filelock>=3.16", "zstandard>=0.23", "watchdog>=4", "psutil>=6; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 zstd = ["zstandard>=0.23"]
 watch = ["watchdog>=4"]
 mcp = ["mcp>=1.12.4"]
-dev = ["pytest>=8", "zstandard>=0.23", "mcp>=1.12.4"]
+dev = ["pytest>=8", "zstandard>=0.23", "mcp>=1.12.4", "psutil>=6"]
 desktop = ["pyinstaller>=6.0", "mcp[cli]>=1.12.4", "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'", "pystray>=0.19.5; sys_platform == 'win32'", "Pillow>=10; sys_platform == 'win32'"]
 
 [project.scripts]

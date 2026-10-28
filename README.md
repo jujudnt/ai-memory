@@ -213,6 +213,12 @@ Les transferts sont adressés par le hash du contenu : relancer une synchronisat
 
 ### Charge en arrière-plan
 
+Depuis la version 0.4.38, la collecte utilise les notifications natives de fichiers sur macOS, Windows et Linux. Les changements rapprochés sont regroupés sur l'intervalle de collecte (10 secondes par défaut). Au repos, un contrôle complet reste effectué chaque minute pour découvrir de nouveaux dossiers et rattraper une notification perdue. Si les notifications sont indisponibles, la vérification périodique reprend automatiquement. Les demandes de synchronisation restent traitées indépendamment des nouveaux messages.
+
+Les journaux Codex, Claude et VS Code sont analysés progressivement après vérification du préfixe déjà importé. Le cache de travail garde au maximum quatre sessions et 32 Mio d'état d'analyse. Une réécriture, une troncature, une ligne incomplète ou l'éviction du cache entraîne une nouvelle analyse complète. La source reste lue en flux pour vérifier son empreinte, avec une copie temporaire limitée à 1 Mio en mémoire puis stockée sur disque. Cette vérification protège l'intégrité des archives, elle ne supprime pas toutes les lectures disque. Les sauvegardes complètes et les ajouts sont compressés en flux. Les fichiers JSON non incrémentaux de VS Code restent analysés entièrement.
+
+La priorité du processus de collecte est aussi abaissée sous Windows, sans relever une priorité déjà plus faible. Les mesures synthétiques CPU et mémoire sont publiées comme artefacts des tests CI sur les trois systèmes. Elles ne mesurent ni l'autonomie réelle ni les transferts d'un compte cloud réel. Pour reproduire la comparaison avec la version 0.4.37 : `python scripts/benchmark_collector.py --output benchmark.json` après installation des dépendances de développement.
+
 Depuis la version 0.4.32, le watcher continu demande une priorité CPU réduite sur macOS/Linux. Les empreintes des archives courantes sont réutilisées tant que leur taille, dates de modification/changement et inode restent identiques ; les changements sont toujours vérifiés. Le calcul des tailles parcourt le stockage une seule fois, au maximum une fois par minute par interface. Une synchronisation automatique attend normalement une minute **après la fin** de la précédente (15 secondes si le dossier cloud local est indisponible) ; une demande explicite reste immédiate.
 
 Le premier import, une grosse conversation active et les transferts iCloud peuvent encore consommer des ressources. Ces optimisations ne constituent pas une limite stricte de CPU ou de mémoire. Pour diagnostiquer un autre ordinateur, relever AI Memory / ai-memory-cli / rclone dans le Moniteur d'activité, ainsi que la pression mémoire ; une mesure sur un autre Mac ne permet pas d'attribuer le ralentissement.
@@ -574,6 +580,12 @@ There is not yet an automatic cloud history size limit: genuinely distinct revis
 Transfers are content-addressed: restarting synchronization does not create another copy of the same object. AI Memory also merges snapshots with identical conversation content even when Codex or Claude reported them under another client, then removes those redundant variants from the cloud.
 
 ### Background resource usage
+
+Since version 0.4.38, collection uses native file notifications on macOS, Windows and Linux. Bursts are coalesced over the collection interval (10 seconds by default). An idle full scan still runs every minute to discover new folders and recover missed events. If notifications are unavailable, periodic polling resumes automatically. Explicit sync requests are handled independently of new messages.
+
+Codex, Claude and VS Code journals reuse parser state after verifying the previously imported prefix. The working cache retains at most four sessions and 32 MiB of parser state. Rewrites, truncation, incomplete lines and eviction fall back to a full parse. Source bytes are still streamed to verify their hash, using a temporary snapshot that spills to disk after 1 MiB. This integrity check does not eliminate all disk reads. Full raw backups and append deltas are compressed as streams. VS Code JSON snapshots still require full parsing.
+
+Windows collection also lowers its CPU priority without raising an already lower priority. Synthetic CPU and memory comparisons are published as CI artifacts on all three systems. They do not measure actual battery life or real cloud accounts. Reproduce the comparison against 0.4.37 with `python scripts/benchmark_collector.py --output benchmark.json` after installing development dependencies.
 
 Since version 0.4.32, the continuous watcher requests lower CPU priority on macOS/Linux. Current archive hashes are reused while size, modification/change timestamps and inode remain unchanged; changes are still checked. Storage size calculation walks the data once, at most once a minute per interface. Automatic synchronization normally waits one minute **after the previous run finishes** (15 seconds when the local cloud folder is unavailable); explicit requests remain immediate.
 
